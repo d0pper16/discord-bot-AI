@@ -4,15 +4,29 @@ body {
   background: #0f172a; color: #e2e8f0;
 }
 header {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: flex-start; justify-content: space-between;
   padding: 16px 24px; background: #1e293b; border-bottom: 1px solid #334155;
 }
 header h1 { margin: 0; font-size: 22px; }
 header small { font-weight: 400; color: #94a3b8; margin-left: 8px; }
-.status { font-size: 13px; color: #94a3b8; white-space: pre; }
+.header-right { text-align: right; }
+.who {
+  display: inline-block; font-size: 12px; color: #38bdf8;
+  background: #0f172a; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid #334155; margin-bottom: 4px;
+}
+.status {
+  font-size: 12px; color: #94a3b8; white-space: pre;
+  background: transparent; margin: 0; padding: 0;
+}
+.readonly-banner {
+  background: #f59e0b; color: #1e293b; font-weight: 600;
+  text-align: center; padding: 8px 16px; font-size: 13px;
+}
+
 nav.tabs {
   display: flex; gap: 4px; padding: 0 24px;
-  background: #1e293b; border-bottom: 1px solid #334155;
+  background: #1e293b; border-bottom: 1px solid #334155; flex-wrap: wrap;
 }
 nav.tabs button {
   background: transparent; border: 0; color: #94a3b8;
@@ -20,12 +34,15 @@ nav.tabs button {
   border-bottom: 2px solid transparent;
 }
 nav.tabs button.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+
 .tab { display: none; padding: 24px; }
 .tab.active { display: block; }
+
 .card {
   background: #1e293b; border: 1px solid #334155; border-radius: 8px;
-  padding: 16px; margin-bottom: 24px; max-width: 800px;
+  padding: 16px; margin-bottom: 24px; max-width: 900px;
 }
+
 label { display: block; margin-bottom: 12px; font-size: 13px; color: #cbd5e1; }
 input, textarea, select {
   width: 100%; padding: 8px; background: #0f172a;
@@ -33,15 +50,25 @@ input, textarea, select {
   font-family: ui-monospace, monospace; font-size: 13px;
 }
 textarea { resize: vertical; }
+
 button {
   padding: 8px 16px; background: #0ea5e9; color: white;
   border: 0; border-radius: 4px; cursor: pointer; font-size: 13px;
   margin-right: 6px;
 }
 button:hover { background: #0284c7; }
+button.secondary { background: #475569; }
+button.secondary:hover { background: #334155; }
 button.danger { background: #dc2626; }
 button.danger:hover { background: #b91c1c; }
-.row { display: flex; gap: 8px; }
+button:disabled, button[disabled] {
+  background: #334155 !important; color: #64748b !important;
+  cursor: not-allowed !important;
+}
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.locked { opacity: 0.7; }
+
 table {
   width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px;
 }
@@ -49,9 +76,50 @@ th, td {
   text-align: left; padding: 8px; border-bottom: 1px solid #334155;
   vertical-align: top;
 }
-th { background: #1e293b; color: #94a3b8; font-weight: 600; }
+th { background: #1e293b; color: #94a3b8; font-weight: 600;
+     position: sticky; top: 0; z-index: 1; }
 td { color: #cbd5e1; }
+.act { white-space: nowrap; }
+.act button { padding: 4px 8px; font-size: 12px; margin: 0 2px 0 0; }
+
+.cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+        word-break: break-word; }
+
 .hint { color: #94a3b8; font-size: 13px; margin: 4px 0 12px; }
 pre { background: #0f172a; padding: 12px; border-radius: 4px; overflow-x: auto; }
-.act { display: inline-flex; gap: 4px; }
-.act button { padding: 4px 8px; font-size: 12px; }
+code { background: #0f172a; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+
+/* ===== History toolbar + scroll ===== */
+.history-toolbar {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 12px; flex-wrap: wrap;
+}
+.history-toolbar input {
+  flex: 1 1 320px; max-width: 600px;
+}
+.history-scroll {
+  max-height: 60vh; overflow: auto;
+  border: 1px solid #334155; border-radius: 8px;
+  background: #0f172a;
+}
+.history-scroll table { margin-top: 0; }
+
+/* ===== Modal Konfirmasi ===== */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal[hidden] { display: none; }
+.modal-box {
+  background: #1e293b; border: 1px solid #475569; border-radius: 8px;
+  padding: 24px; max-width: 420px; width: 90%;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.modal-box h3 { margin: 0 0 8px; color: #f8fafc; }
+.modal-box p { margin: 0 0 16px; color: #cbd5e1; font-size: 13px; }
+.modal-box .error {
+  color: #fca5a5; background: #450a0a; padding: 6px 10px;
+  border-radius: 4px; font-size: 12px;
+}

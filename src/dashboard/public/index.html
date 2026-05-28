@@ -9,28 +9,31 @@
 <body>
 <header>
   <h1>Yanto <small>Dashboard</small></h1>
-  <div id="status" class="status"></div>
+  <div class="header-right">
+    <span id="who" class="who"></span>
+    <pre id="status" class="status"></pre>
+  </div>
 </header>
 
 <nav class="tabs">
   <button data-tab="maps" class="active">Map Roblox DB</button>
-  <button data-tab="history">Riwayat Chat (Cache)</button>
   <button data-tab="personality">Kepribadian Yanto</button>
   <button data-tab="config">Config</button>
   <button data-tab="upload">Upload Script</button>
+  <button data-tab="history">Riwayat Chat (Cache)</button>
 </nav>
 
 <!-- ====== MAPS ====== -->
 <section id="tab-maps" class="tab active">
   <h2>Database Map Roblox</h2>
-  <form id="map-form" class="card">
+  <form id="map-form" class="card writer">
     <input type="hidden" name="id" />
     <label>Topik / Nama Map<input name="topic" required></label>
     <label>Tag (pisah koma)<input name="tags" placeholder="pvp, parkour, lobby"></label>
     <label>Konten / Penjelasan<textarea name="content" rows="6" required></textarea></label>
     <div class="row">
       <button type="submit">Simpan</button>
-      <button type="button" id="map-reset">Reset</button>
+      <button type="button" id="map-reset" class="secondary">Reset</button>
     </div>
   </form>
 
@@ -40,57 +43,101 @@
   </table>
 </section>
 
-<!-- ====== HISTORY ====== -->
-<section id="tab-history" class="tab">
-  <h2>Riwayat Chat (Cache)</h2>
-  <div class="row">
-    <button id="history-refresh">Refresh</button>
-    <button id="history-clear" class="danger">Hapus Semua</button>
-  </div>
-  <table id="history-table">
-    <thead><tr><th>ID</th><th>User</th><th>Tanya</th><th>Jawab</th><th>Sumber</th><th>Aksi</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</section>
-
 <!-- ====== PERSONALITY ====== -->
 <section id="tab-personality" class="tab">
   <h2>Kepribadian Yanto (personality.js)</h2>
-  <p class="hint">Edit di sini -> langsung dipakai bot tanpa restart.</p>
+  <p class="hint">Edit di sini → langsung dipakai bot tanpa restart.</p>
   <textarea id="personality-editor" rows="22"></textarea>
-  <div class="row">
+  <div class="row writer">
     <button id="personality-save">Simpan</button>
-    <button id="personality-reload">Muat Ulang dari File</button>
+    <button id="personality-reload" class="secondary">Muat Ulang dari File</button>
   </div>
 </section>
 
 <!-- ====== CONFIG ====== -->
 <section id="tab-config" class="tab">
   <h2>config.json</h2>
+  <p class="hint">
+    Tuning bot tanpa nyentuh kode: keyword pemicu, sensitivitas cache,
+    limit RPM/RPD per API key, panjang memori chat.
+  </p>
   <textarea id="config-editor" rows="22"></textarea>
-  <div class="row">
+  <div class="row writer">
     <button id="config-save">Simpan</button>
-    <button id="config-reload">Muat Ulang</button>
+    <button id="config-reload" class="secondary">Muat Ulang</button>
   </div>
 </section>
 
 <!-- ====== UPLOAD ====== -->
 <section id="tab-upload" class="tab">
-  <h2>Upload Script (replace file)</h2>
-  <p class="hint">File akan menggantikan target di server. Hot-reload otomatis aktif.</p>
-  <form id="upload-form" class="card">
-    <label>Target
+  <h2>Upload Script (replace 1 file)</h2>
+  <p class="hint">
+    Nama file harus cocok dengan target. Hanya 1 file yang ditargetkan
+    yang ditimpa, file lain tidak terpengaruh. Penulisan atomic
+    (tulis .tmp → rename) agar bot tidak baca file setengah jadi.
+  </p>
+  <form id="upload-form" class="card writer">
+    <label>Target file
       <select name="target" required>
-        <option value="personality">personality.js (Kepribadian)</option>
+        <option value="personality">src/ai/personality.js</option>
         <option value="config">config.json</option>
-        <option value="bot">bot.js (script utama)</option>
+        <option value="bot">src/bot.js</option>
       </select>
     </label>
-    <label>File<input type="file" name="file" required></label>
+    <label>File baru<input type="file" name="file" required></label>
     <button type="submit">Upload</button>
   </form>
   <pre id="upload-result"></pre>
 </section>
+
+<!-- ====== HISTORY (paling bawah) ====== -->
+<section id="tab-history" class="tab">
+  <h2>Riwayat Chat / Cache</h2>
+  <div class="history-toolbar">
+    <input id="history-search" type="text"
+           placeholder="cari kata kunci di pertanyaan / jawaban / user id…">
+    <button id="history-refresh" class="secondary">Refresh</button>
+    <button id="history-clear" class="danger writer">Hapus Semua</button>
+    <span id="history-count" class="hint"></span>
+  </div>
+  <div class="history-scroll">
+    <table id="history-table">
+      <thead>
+        <tr>
+          <th>ID</th><th>User</th><th>Pertanyaan</th>
+          <th>Jawaban</th><th>Sumber</th><th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- Editor inline untuk 1 entry -->
+  <div id="history-editor" class="card writer" hidden>
+    <h3>Edit entry <span id="he-id"></span></h3>
+    <label>Pertanyaan<textarea id="he-question" rows="3"></textarea></label>
+    <label>Jawaban<textarea id="he-answer" rows="6"></textarea></label>
+    <div class="row">
+      <button id="he-save">Simpan Perubahan</button>
+      <button id="he-cancel" class="secondary">Batal</button>
+    </div>
+  </div>
+</section>
+
+<!-- ====== MODAL KONFIRMASI ====== -->
+<div id="confirm-modal" class="modal" hidden>
+  <div class="modal-box">
+    <h3>Konfirmasi Perubahan</h3>
+    <p id="confirm-msg">Yakin melakukan perubahan? Isi ulang user &amp; password dev.</p>
+    <label>Username<input id="confirm-user" autocomplete="off"></label>
+    <label>Password<input id="confirm-pass" type="password" autocomplete="off"></label>
+    <p id="confirm-error" class="error" hidden></p>
+    <div class="row">
+      <button id="confirm-ok">Ya, Lanjutkan</button>
+      <button id="confirm-cancel" class="secondary">Batal</button>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>

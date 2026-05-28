@@ -69,6 +69,38 @@ npm start
 
 Dashboard: `http://localhost:3000` (basic-auth: `DASHBOARD_USER` / `DASHBOARD_PASS`).
 
+## Login Dashboard (2 Role)
+
+| Role | Username | Password | Hak Akses |
+|------|----------|----------|-----------|
+| **dev** | `dev` | `devtbiapril2026` | Full: edit, upload, hapus, ubah cache, ubah DB map |
+| **admin** | `admin` | `admintbi2025` | **Read-only**: hanya pantau (status API, lihat DB, lihat cache) |
+
+Akun `admin` tidak bisa menambah/mengubah/menghapus apa pun — semua tombol tulis akan disabled.
+
+### Konfirmasi Ulang
+
+Setiap aksi tulis (simpan personality, simpan config, upload file, tambah/edit/hapus map, edit/hapus entry cache, hapus seluruh cache) akan memunculkan **modal "Yakin melakukan perubahan?"** yang meminta isi ulang username + password dev. Tujuannya: cegah perubahan tidak sengaja & audit jejak yang jelas.
+
+## Update File via Dashboard (tanpa Git/SSH)
+
+Tab **Upload Script** menerima 1 file dan replace target sesuai nama:
+
+| Target | File yang Ditimpa | Hot-reload? |
+|--------|-------------------|-------------|
+| personality | `src/ai/personality.js` | ✅ otomatis |
+| config | `config.json` | ✅ otomatis |
+| bot | `src/bot.js` | ⚠️ butuh restart proses |
+
+Aturan keamanan:
+- **Nama file harus cocok** (`personality.js` / `config.json` / `bot.js`).
+  Upload nama lain → ditolak. Cegah replace silang.
+- **JSON divalidasi** sebelum ditimpa.
+- **Atomic write**: file ditulis ke `.tmp` lalu di-`rename`. Bot tidak akan
+  pernah baca file setengah jadi.
+- **Cuma 1 file** yang disentuh per upload — file lain (DB, cache, script
+  lain) tidak terpengaruh sama sekali.
+
 ## Cara Pakai (Discord)
 
 Di channel yang ID-nya disetel pada `YANTO_CHANNEL_ID`, ketik:

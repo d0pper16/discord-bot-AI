@@ -11,10 +11,18 @@ const stmt = {
                             VALUES (@channel_id, @user_id, @question, @question_norm, @answer, @source)`),
   updateAns:   db.prepare(`UPDATE chat_history SET answer=@answer, source=@source,
                             updated_at=strftime('%s','now') WHERE id=@id`),
+  updateFull:  db.prepare(`UPDATE chat_history
+                            SET question=@question, question_norm=@question_norm,
+                                answer=@answer, updated_at=strftime('%s','now')
+                            WHERE id=@id`),
   remove:      db.prepare('DELETE FROM chat_history WHERE id = ?'),
   clearAll:    db.prepare('DELETE FROM chat_history'),
   recent:      db.prepare(`SELECT question, answer FROM chat_history
                             WHERE channel_id = ? ORDER BY id DESC LIMIT ?`),
+  search:      db.prepare(`SELECT * FROM chat_history
+                            WHERE question LIKE @q OR answer LIKE @q OR user_id LIKE @q
+                            ORDER BY id DESC LIMIT @limit`),
+  getOne:      db.prepare('SELECT * FROM chat_history WHERE id = ?'),
 };
 
 function normalize(text) {
@@ -95,6 +103,24 @@ function updateAnswer(id, answer, source = 'gemini') {
   stmt.updateAns.run({ id, answer, source });
 }
 
+function updateEntry(id, { question, answer }) {
+  stmt.updateFull.run({
+    id,
+    question,
+    question_norm: normalize(question),
+    answer,
+  });
+  return stmt.getOne.get(id);
+}
+
+function searchHistory(query, limit = 200) {
+  const lim = Math.min(Math.max(Number(limit) || 200, 1), 1000);
+  if (!query || !String(query).trim()) {
+    return stmt.list.all(lim);
+  }
+  return stmt.search.all({ q: `%${String(query).trim()}%`, limit: lim });
+}
+
 function deleteEntry(id) {
   return stmt.remove.run(id).changes > 0;
 }
@@ -113,6 +139,8 @@ module.exports = {
   findSimilar,
   saveAnswer,
   updateAnswer,
+  updateEntry,
+  searchHistory,
   deleteEntry,
   clearAll,
 };
