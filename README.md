@@ -1,58 +1,78 @@
-# Yanto — Discord Bot AI (Gemini + SQLite + Dashboard)
+# Yanto - Discord Bot AI (Gemini + SQLite + Dashboard)
 
-Bot Discord "Yanto" dengan kepribadian sendiri, sumber jawaban dari database
-map Roblox (SQLite), 2 API key Gemini (utama + fallback), cache riwayat chat,
+Bot Discord dengan kepribadian sendiri (default "Yanto", bisa di-rename),
+sumber jawaban dari database map Roblox (SQLite), 2 API key Gemini
+(utama + fallback), cache riwayat chat, rate-limit dance + spam timeout,
 dan dashboard web untuk edit semuanya secara realtime.
 
-## Fitur
+## Fitur Inti
 
-- **Kepribadian**: persona "Yanto" santai, ramah, kocak, jawab pakai DATA MAP saja.
-- **Trigger**: hanya merespon pesan yang mengandung kata `yanto` (case-insensitive)
-  pada channel Discord dengan ID yang ditentukan di `.env`.
-- **Sumber kebenaran**: tabel `map_data` di SQLite. Bot dilarang ngarang —
-  hanya jawab berdasar isi DB.
+- **Persona dinamis**: nama bot (mis. "Yanto" / "Dandi") diatur di Config.
+  Mengubah nama otomatis mengganti keyword pemicu, sapaan masuk/keluar/restart,
+  dan referensi diri di prompt.
+- **Trigger**: hanya merespon pesan di channel `YANTO_CHANNEL_ID` yang
+  mengandung kata `keyword` (default `yanto`, ikut nama bot).
+- **Sumber kebenaran**: tabel `map_data` di SQLite (`better-sqlite3`).
+  Bot dilarang mengarang - hanya menjawab dari konten DB.
 - **2 API Gemini bergiliran**:
-  - `GEMINI_API_KEY_PRIMARY` selalu jadi prioritas.
-  - `GEMINI_API_KEY_SECONDARY` otomatis dipakai bila primary kena
-    rate-limit per-menit / per-hari atau cooldown.
+  - PRIMARY selalu prioritas; otomatis fallback ke SECONDARY saat
+    rate-limit / cooldown.
+  - Reserve token: `N` token RPM dicadangkan untuk balasan setelah
+    "sabar ya kak..." (default `N=1`).
 - **Cache jawaban**:
-  - Pertanyaan baru -> jawab via Gemini, disimpan di `chat_history`.
-  - Pertanyaan mirip / sama -> jawab dari cache, **tanpa** request Gemini.
-  - User minta lebih detail (`"lebih detail"`, `"lebih spesifik"`, dll.) ->
-    bot regenerate via Gemini lalu **replace** entry cache lama.
-- **Dashboard realtime** (Express, port 3000):
-  - Edit `personality.js` (kepribadian Yanto) -> hot-reload tanpa restart.
-  - Edit `config.json` (kata kunci, threshold, limit API) -> hot-reload.
-  - CRUD database map Roblox (topic, content, tags).
-  - Lihat / hapus riwayat chat (cache).
-  - Upload file `.js` / `.json` untuk replace script.
-- **Hot-reload**: pakai `chokidar` + `require.cache` purge -> tidak ganggu
-  koneksi Discord, tidak ganggu cache chat, tidak ganggu DB.
+  - Baru -> Gemini -> simpan.
+  - Mirip -> langsung cache (tanpa request Gemini).
+  - "lebih detail / spesifik" -> regenerate -> replace cache.
+- **Rate-limit dance**:
+  - 1x kena limit -> bot balas `"sabar ya kak, kasih aku mikir dulu 1 menit yaa"`,
+    setelah 60 detik bot menjawab pertanyaan asli pakai reserve token.
+  - 2x masih maksa -> `"jika kamu tidak bisa bersabar maka akan {nama} bungkam ya @user"`.
+  - 3x maksa -> Discord-timeout user 5 menit + `"maaf yah @user {nama} bungkam, kamu gasabaran sih jadi manusia, {nama} robot bukan nabi boyyy..."`.
+- **Sapaan startup**:
+  - Cold start: 5 detik validasi token Gemini.
+    Sukses -> `"halo, kenalin aku {nama} aku adalah AI paling ganteng sedunia..."`.
+    Gagal -> `"maaf yah, token/API kamu salah/error nih, aku gagal mendarat"` (retry 1x).
+  - Restart (setelah upload bot.js): 4 detik jeda lalu
+    `"hoamm... enak banget tidurnya walaupun gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone"`.
+  - Sebelum restart: `"{Nama} capek, {nama} tidur dulu yaa, babay semua... @everyone"` lalu diam total 5 detik sebelum exit.
+- **Sleeping mode**: saat bot lagi pamit / sebelum validasi sukses,
+  bot SAMA SEKALI tidak merespon walau di-spam keyword.
+- **Dashboard web** dengan 2 role:
+  - `dev` / `devtbiapril2026` -> full administrator.
+  - `admin` / `admintbi2025` -> read-only (tombol disabled, tanpa banner).
+  - Setiap aksi tulis butuh re-konfirmasi user/pass dev (modal).
+- **Auto-restart bot.js**: upload `bot.js` -> bot pamit 5 detik ->
+  `process.exit(42)` -> supervisor `runner.js` respawn 2 detik ->
+  bot bangun & sapa.
+- **Rename guard**: ganti nama bot dicek dulu ukuran cache.
+  Cache > 100KB -> ditolak, harus dihapus dulu. < 100KB -> rename
+  juga dilakukan di seluruh row `chat_history`.
 
 ## Struktur
 
 ```
 discord-bot-AI/
-├── package.json
-├── config.json
+├── runner.js               supervisor: respawn pada exit code 42
+├── package.json            "start": "node runner.js"
+├── config.json             tuning runtime (di-edit lewat dashboard)
 ├── .env.example
 ├── data/
-│   └── bot.db                # auto-create
+│   └── bot.db              SQLite (map_data, chat_history, api_usage)
 └── src/
-    ├── index.js              # entry
-    ├── bot.js                # Discord handler
+    ├── index.js            entry: dashboard + bot + watcher
+    ├── bot.js              Discord handler (sleeping, sabar, spam timeout)
     ├── ai/
-    │   ├── gemini.js         # rotasi 2 API + tracking limit
-    │   └── personality.js    # persona Yanto (HOT-RELOAD)
+    │   ├── gemini.js       rotasi 2 API + allowReserve + validate()
+    │   └── personality.js  persona (parameterized by name)
     ├── db/
-    │   ├── database.js       # init SQLite
-    │   ├── mapData.js        # CRUD map Roblox
-    │   └── chatHistory.js    # cache riwayat chat
+    │   ├── database.js     init SQLite (WAL)
+    │   ├── mapData.js      CRUD map Roblox + buildContext
+    │   └── chatHistory.js  cache + Jaccard similarity + search
     ├── dashboard/
-    │   ├── server.js         # REST API + static
-    │   └── public/           # HTML/CSS/JS dashboard
+    │   ├── server.js       REST API (role-based + confirm + form-fields config)
+    │   └── public/         UI
     └── utils/
-        ├── hotReload.js
+        ├── hotReload.js    chokidar + bus event
         └── logger.js
 ```
 
@@ -61,71 +81,64 @@ discord-bot-AI/
 ```bash
 cd discord-bot-AI
 cp .env.example .env
-# edit .env -> isi DISCORD_TOKEN, YANTO_CHANNEL_ID,
-# GEMINI_API_KEY_PRIMARY, GEMINI_API_KEY_SECONDARY
+# edit .env -> isi token & API key
 npm install
-npm start
+npm start                    # menjalankan via supervisor (auto-restart)
+# atau:
+npm run start:once           # tanpa supervisor (single proses)
 ```
 
-Dashboard: `http://localhost:3000` (basic-auth: `DASHBOARD_USER` / `DASHBOARD_PASS`).
+Dashboard: `http://localhost:3000`.
 
-## Login Dashboard (2 Role)
+## Config Bot (form fields, dengan validasi min/max)
 
-| Role | Username | Password | Hak Akses |
-|------|----------|----------|-----------|
-| **dev** | `dev` | `devtbiapril2026` | Full: edit, upload, hapus, ubah cache, ubah DB map |
-| **admin** | `admin` | `admintbi2025` | **Read-only**: hanya pantau (status API, lihat DB, lihat cache) |
+Semua kolom punya batas keras supaya tidak merusak sistem:
 
-Akun `admin` tidak bisa menambah/mengubah/menghapus apa pun — semua tombol tulis akan disabled.
+| Field | Min | Max | Default | Catatan |
+|------|-----|-----|---------|---------|
+| Nama Bot | 2 | 20 char | Yanto | alfanumerik, awal huruf |
+| RPM Limit | 2 | 60 | 14 | request/menit per key |
+| RPD Limit | 100 | 50000 | 1400 | request/hari per key |
+| Cooldown switch API | 10 dtk | 300 dtk | 30 dtk | UI: detik. File: ms. |
+| Reserve token | 0 | 3 | 1 | dipakai setelah "sabar". Harus < RPM Limit. |
+| Threshold cache | 0.5 | 1.0 | 0.82 | similarity Jaccard |
+| Memori pesan | 0 | 30 | 10 | Q/A terakhir dikirim ke AI |
+| Pemicu detail | - | 50 item | (preset) | satu frasa per baris |
 
-### Konfirmasi Ulang
+Bot yang menulis `config.json` (dashboard cuma perantara). Penulisan **atomic**
+(`.tmp` -> rename) supaya bot tidak baca file setengah jadi.
 
-Setiap aksi tulis (simpan personality, simpan config, upload file, tambah/edit/hapus map, edit/hapus entry cache, hapus seluruh cache) akan memunculkan **modal "Yakin melakukan perubahan?"** yang meminta isi ulang username + password dev. Tujuannya: cegah perubahan tidak sengaja & audit jejak yang jelas.
+## Login Dashboard
+
+| Role | User | Pass | Hak |
+|------|------|------|-----|
+| dev | `dev` | `devtbiapril2026` | Full edit/upload/hapus |
+| admin | `admin` | `admintbi2025` | Read-only (tombol disabled) |
+
+Setiap aksi tulis -> modal "Yakin? Isi ulang user/pass dev".
 
 ## Update File via Dashboard (tanpa Git/SSH)
 
-Tab **Upload Script** menerima 1 file dan replace target sesuai nama:
+Tab **Upload Script**:
 
-| Target | File yang Ditimpa | Hot-reload? |
-|--------|-------------------|-------------|
-| personality | `src/ai/personality.js` | ✅ otomatis |
-| config | `config.json` | ✅ otomatis |
-| bot | `src/bot.js` | ⚠️ butuh restart proses |
+| Target | Nama file wajib | Perilaku setelah upload |
+|--------|-----------------|--------------------------|
+| personality | `personality.js` | hot-reload, langsung aktif |
+| config | `config.json` | hot-reload (validasi JSON dulu) |
+| bot | `bot.js` | bot pamit 5 dtk -> exit 42 -> supervisor respawn 2 dtk -> bot sapa "hoamm..." |
 
-Aturan keamanan:
-- **Nama file harus cocok** (`personality.js` / `config.json` / `bot.js`).
-  Upload nama lain → ditolak. Cegah replace silang.
-- **JSON divalidasi** sebelum ditimpa.
-- **Atomic write**: file ditulis ke `.tmp` lalu di-`rename`. Bot tidak akan
-  pernah baca file setengah jadi.
-- **Cuma 1 file** yang disentuh per upload — file lain (DB, cache, script
-  lain) tidak terpengaruh sama sekali.
+Hanya **1 file** yang di-replace per upload. DB, cache, file lain tidak tersentuh.
 
-## Cara Pakai (Discord)
+## Permissions Discord (penting untuk timeout user)
 
-Di channel yang ID-nya disetel pada `YANTO_CHANNEL_ID`, ketik:
+Bot butuh permission **`Moderate Members`** + role bot harus lebih tinggi
+dari role user yang akan di-timeout. Tanpa ini, fitur timeout 5 menit
+fallback ke "internal mute" (bot mengabaikan user, tapi Discord tidak men-timeout).
 
-```
-yanto map kebun ada apa aja?
-yanto, ada checkpoint di map "Lobby Kota"?
-yanto jelaskan lebih detail soal map parkour
-```
+## Catatan Operasional
 
-Bot hanya merespon kalau kata `yanto` muncul. Pesan tanpa kata kunci diabaikan.
-
-## Catatan API Gemini
-
-Limit default di `config.json`:
-- `rpmLimit`: 14 request/menit per key
-- `rpdLimit`: 1400 request/hari per key
-- `cooldownMs`: 60000 (1 menit cooldown bila key dilempar 429)
-
-Sesuaikan dengan kuota tier Gemini kamu.
-
-## Aman dari Restart
-
-- DB file (`data/bot.db`) tidak pernah di-rewrite saat hot-reload.
-- Cache chat tetap utuh meski `personality.js` diganti.
-- Replace `bot.js` lewat dashboard memerlukan restart proses
-  (file disimpan, tapi modul Discord aktif tidak diganti karena ini
-  bisa memutus session — sengaja tidak otomatis).
+- DB `data/bot.db` & `chat_history` tidak pernah di-rewrite saat hot-reload.
+- Saat bot.js di-upload, koneksi Discord di-destroy dulu sebelum exit
+  supaya pesan pamit ter-flush.
+- Cache > 100KB & user mau ganti nama? Hapus dulu di tab "Riwayat Chat"
+  (search "yanto" / "Yanto" -> hapus terkait, atau Hapus Semua).

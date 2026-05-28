@@ -17,8 +17,8 @@
 
 <nav class="tabs">
   <button data-tab="maps" class="active">Map Roblox DB</button>
-  <button data-tab="personality">Kepribadian Yanto</button>
-  <button data-tab="config">Config</button>
+  <button data-tab="personality">Kepribadian</button>
+  <button data-tab="config">Config Bot</button>
   <button data-tab="upload">Upload Script</button>
   <button data-tab="history">Riwayat Chat (Cache)</button>
 </nav>
@@ -45,25 +45,91 @@
 
 <!-- ====== PERSONALITY ====== -->
 <section id="tab-personality" class="tab">
-  <h2>Kepribadian Yanto (personality.js)</h2>
-  <p class="hint">Edit di sini → langsung dipakai bot tanpa restart.</p>
-  <textarea id="personality-editor" rows="22"></textarea>
-  <div class="row writer">
-    <button id="personality-save">Simpan</button>
+  <h2>Kepribadian Bot (personality.js)</h2>
+  <p class="hint">Edit di sini -> langsung dipakai bot tanpa restart. Nama bot diambil dari Config Bot, jadi rename otomatis menyebar ke prompt.</p>
+  <textarea id="personality-editor" rows="22" class="writer-input"></textarea>
+  <div class="row">
+    <button id="personality-save" class="writer">Simpan</button>
     <button id="personality-reload" class="secondary">Muat Ulang dari File</button>
   </div>
 </section>
 
-<!-- ====== CONFIG ====== -->
+<!-- ====== CONFIG (form fields) ====== -->
 <section id="tab-config" class="tab">
-  <h2>config.json</h2>
+  <h2>Config Bot</h2>
   <p class="hint">
-    Tuning bot tanpa nyentuh kode: keyword pemicu, sensitivitas cache,
-    limit RPM/RPD per API key, panjang memori chat.
+    Tuning lewat kolom angka. Bot yang menulis config.json - dashboard cuma perantara,
+    semua nilai divalidasi min/max sebelum disimpan.
   </p>
-  <textarea id="config-editor" rows="22"></textarea>
-  <div class="row writer">
-    <button id="config-save">Simpan</button>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Identitas</h3>
+    <label>
+      Nama Bot
+      <input id="cfg-name" type="text" maxlength="20" class="writer-input">
+      <small class="hint">2-20 karakter alfanumerik, awal huruf. Mengubah nama akan mengganti keyword pemicu, sapaan masuk/keluar, dan nama di seluruh prompt.</small>
+    </label>
+    <div id="cfg-cache-info" class="cache-info"></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Gemini API</h3>
+
+    <label class="grid-row">
+      <span>RPM Limit per key
+        <small>request/menit (2-60). Default: 14.</small>
+      </span>
+      <input id="cfg-rpm" type="number" min="2" max="60" step="1" class="writer-input">
+    </label>
+
+    <label class="grid-row">
+      <span>RPD Limit per key
+        <small>request/hari (100-50000). Default: 1400.</small>
+      </span>
+      <input id="cfg-rpd" type="number" min="100" max="50000" step="1" class="writer-input">
+    </label>
+
+    <label class="grid-row">
+      <span>Cooldown switch API
+        <small>detik (10-300). Lama key di-jeda setelah kena 429. Default: 30.</small>
+      </span>
+      <input id="cfg-cd" type="number" min="10" max="300" step="1" class="writer-input">
+    </label>
+
+    <label class="grid-row">
+      <span>Reserve token
+        <small>kuota RPM yang dicadangkan untuk balasan setelah "sabar". Default: 1.</small>
+      </span>
+      <input id="cfg-reserve" type="number" min="0" max="3" step="1" class="writer-input">
+    </label>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Cache & Memori</h3>
+
+    <label class="grid-row">
+      <span>Threshold similarity cache
+        <small>0.50-1.00. Makin tinggi makin ketat. Default: 0.82.</small>
+      </span>
+      <input id="cfg-sim" type="number" min="0.5" max="1.0" step="0.01" class="writer-input">
+    </label>
+
+    <label class="grid-row">
+      <span>Memori pesan terakhir
+        <small>0-30 pasang Q/A dikirim ke AI sebagai konteks. Default: 10.</small>
+      </span>
+      <input id="cfg-ctx" type="number" min="0" max="30" step="1" class="writer-input">
+    </label>
+
+    <label>
+      Pemicu jawaban detail (1 frasa per baris)
+      <textarea id="cfg-triggers" rows="6" class="writer-input"></textarea>
+      <small class="hint">Bila pesan user mengandung salah satu frasa ini, bot akan regenerate jawaban (replace cache).</small>
+    </label>
+  </div>
+
+  <div class="row">
+    <button id="config-save" class="writer">Simpan Config</button>
     <button id="config-reload" class="secondary">Muat Ulang</button>
   </div>
 </section>
@@ -72,19 +138,23 @@
 <section id="tab-upload" class="tab">
   <h2>Upload Script (replace 1 file)</h2>
   <p class="hint">
-    Nama file harus cocok dengan target. Hanya 1 file yang ditargetkan
-    yang ditimpa, file lain tidak terpengaruh. Penulisan atomic
-    (tulis .tmp → rename) agar bot tidak baca file setengah jadi.
+    Hanya 1 file yang diganti per upload, file lain TIDAK tersentuh.
+    Penulisan atomic (.tmp -> rename) jadi bot tidak akan baca file setengah jadi.
+    Untuk <code>bot.js</code>, setelah upload bot otomatis pamit "tidur dulu",
+    lalu auto-restart 2-3 detik kemudian, lalu balik dengan sapaan "hoamm...".
   </p>
   <form id="upload-form" class="card writer">
     <label>Target file
-      <select name="target" required>
+      <select name="target" required class="writer-input">
         <option value="personality">src/ai/personality.js</option>
         <option value="config">config.json</option>
-        <option value="bot">src/bot.js</option>
+        <option value="bot">src/bot.js (auto-restart)</option>
       </select>
     </label>
-    <label>File baru<input type="file" name="file" required></label>
+    <label>File baru
+      <input type="file" name="file" required class="writer-input">
+      <small class="hint">Nama file harus persis: personality.js / config.json / bot.js.</small>
+    </label>
     <button type="submit">Upload</button>
   </form>
   <pre id="upload-result"></pre>
@@ -95,7 +165,7 @@
   <h2>Riwayat Chat / Cache</h2>
   <div class="history-toolbar">
     <input id="history-search" type="text"
-           placeholder="cari kata kunci di pertanyaan / jawaban / user id…">
+           placeholder="cari kata kunci di pertanyaan / jawaban / user id...">
     <button id="history-refresh" class="secondary">Refresh</button>
     <button id="history-clear" class="danger writer">Hapus Semua</button>
     <span id="history-count" class="hint"></span>
@@ -112,11 +182,10 @@
     </table>
   </div>
 
-  <!-- Editor inline untuk 1 entry -->
   <div id="history-editor" class="card writer" hidden>
     <h3>Edit entry <span id="he-id"></span></h3>
-    <label>Pertanyaan<textarea id="he-question" rows="3"></textarea></label>
-    <label>Jawaban<textarea id="he-answer" rows="6"></textarea></label>
+    <label>Pertanyaan<textarea id="he-question" rows="3" class="writer-input"></textarea></label>
+    <label>Jawaban<textarea id="he-answer" rows="6" class="writer-input"></textarea></label>
     <div class="row">
       <button id="he-save">Simpan Perubahan</button>
       <button id="he-cancel" class="secondary">Batal</button>

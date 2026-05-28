@@ -1,11 +1,12 @@
 {
   "name": "yanto-discord-bot",
-  "version": "1.0.0",
-  "description": "Bot Discord AI 'Yanto' terintegrasi Gemini API + SQLite + Dashboard realtime.",
-  "main": "src/index.js",
+  "version": "1.1.0",
+  "description": "Bot Discord AI dengan kepribadian sendiri (Yanto/dynamic), Gemini dual-API, SQLite, dashboard realtime.",
+  "main": "runner.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "start": "node runner.js",
+    "start:once": "node src/index.js",
+    "dev": "node --watch runner.js"
   },
   "engines": {
     "node": ">=18.17.0"

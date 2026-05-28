@@ -1,33 +1,29 @@
 'use strict';
 
+const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('../db/database');
 
 /**
- * Layanan Gemini dengan rotasi 2 API key.
- * - PRIMARY selalu didahulukan.
- * - SECONDARY dipakai bila PRIMARY kena RPM/RPD limit
- *   atau melempar error rate-limit dari server.
- *
- * Hitungan kuota di-track di tabel api_usage.
+ * Layanan Gemini.
+ * - PRIMARY selalu didahulukan; SECONDARY fallback.
+ * - Hitung RPM/RPD per key di tabel api_usage.
+ * - Mendukung "reserveTokens": N kuota terakhir/menit DICADANGKAN
+ *   khusus untuk pemanggilan dengan opsi { allowReserve: true }
+ *   (dipakai setelah bot kasih balasan "sabar ya kak..." di rate-limit).
  */
 
-const cfgPath = require('path').join(__dirname, '..', '..', 'config.json');
+const cfgPath = path.join(__dirname, '..', '..', 'config.json');
+
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
   return require(cfgPath);
 }
 
-const KEY_IDS = {
-  primary:   'PRIMARY',
-  secondary: 'SECONDARY',
-};
-
 const KEYS = () => ({
   PRIMARY:   process.env.GEMINI_API_KEY_PRIMARY,
   SECONDARY: process.env.GEMINI_API_KEY_SECONDARY,
 });
-
 const MODEL = () => process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
 const cooldownUntil = { PRIMARY: 0, SECONDARY: 0 };
@@ -49,21 +45,18 @@ function usageOf(keyId) {
   };
 }
 
-function isAvailable(keyId) {
+function isAvailable(keyId, allowReserve = false) {
   const cfg = loadCfg();
   if (!KEYS()[keyId]) return false;
   if (Date.now() < cooldownUntil[keyId]) return false;
   const u = usageOf(keyId);
-  if (u.rpm >= cfg.gemini.rpmLimit) return false;
+  const reserve = Math.max(0, Number(cfg.gemini.reserveTokens || 0));
+  const ceiling = allowReserve
+    ? cfg.gemini.rpmLimit
+    : Math.max(1, cfg.gemini.rpmLimit - reserve);
+  if (u.rpm >= ceiling) return false;
   if (u.rpd >= cfg.gemini.rpdLimit) return false;
   return true;
-}
-
-function pickKey() {
-  // PRIMARY selalu prioritas
-  if (isAvailable('PRIMARY')) return 'PRIMARY';
-  if (isAvailable('SECONDARY')) return 'SECONDARY';
-  return null;
 }
 
 function isRateLimitErr(err) {
@@ -83,10 +76,7 @@ async function callOnce(keyId, prompt, history = []) {
   const model = genAI.getGenerativeModel({ model: MODEL() });
 
   const chat = model.startChat({
-    history: history.map((h) => ({
-      role: h.role,
-      parts: [{ text: h.text }],
-    })),
+    history: history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
     generationConfig: {
       temperature: 0.85,
       topP: 0.9,
@@ -103,14 +93,15 @@ async function callOnce(keyId, prompt, history = []) {
 /**
  * @param {string} prompt
  * @param {Array<{role:'user'|'model', text:string}>} history
+ * @param {{allowReserve?:boolean}} opts
  */
-async function generate(prompt, history = []) {
+async function generate(prompt, history = [], opts = {}) {
   const cfg = loadCfg();
-  const order = ['PRIMARY', 'SECONDARY'];
+  const allowReserve = !!opts.allowReserve;
 
   let lastErr = null;
-  for (const keyId of order) {
-    if (!isAvailable(keyId)) continue;
+  for (const keyId of ['PRIMARY', 'SECONDARY']) {
+    if (!isAvailable(keyId, allowReserve)) continue;
     try {
       const text = await callOnce(keyId, prompt, history);
       return { text, keyUsed: keyId };
@@ -122,19 +113,39 @@ async function generate(prompt, history = []) {
         console.warn(`[gemini] ${keyId} rate-limited, cooldown ${cfg.gemini.cooldownMs}ms`);
         continue;
       }
-      // error non-ratelimit -> langsung lempar (jangan ganti key tanpa alasan)
       throw err;
     }
   }
 
-  // tidak ada key tersedia
-  if (!lastErr) {
-    throw new Error('Semua API Gemini sedang tidak tersedia (limit/cooldown).');
+  // Tidak ada key tersedia -> lempar error rate-limit terstandar
+  const e = new Error(lastErr ? lastErr.message : 'RATE_LIMIT: semua API Gemini sedang habis kuota / cooldown');
+  e.code = 'RATE_LIMIT';
+  throw e;
+}
+
+/**
+ * Validasi token Gemini saat startup.
+ * Mencoba 1 panggilan kecil (TIDAK dihitung di api_usage internal).
+ */
+async function validate() {
+  for (const keyId of ['PRIMARY', 'SECONDARY']) {
+    const apiKey = KEYS()[keyId];
+    if (!apiKey) continue;
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: MODEL() });
+      const r = await model.generateContent('ok');
+      r.response.text();
+      return { ok: true, keyId };
+    } catch (err) {
+      console.warn(`[gemini.validate] ${keyId} gagal: ${err.message}`);
+    }
   }
-  throw lastErr;
+  return { ok: false };
 }
 
 function status() {
+  const cfg = loadCfg();
   return {
     primary: {
       configured: !!KEYS().PRIMARY,
@@ -147,7 +158,8 @@ function status() {
       ...usageOf('SECONDARY'),
     },
     model: MODEL(),
+    reserveTokens: cfg.gemini.reserveTokens || 0,
   };
 }
 
-module.exports = { generate, status, KEY_IDS };
+module.exports = { generate, validate, status };

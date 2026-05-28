@@ -19,10 +19,6 @@ header small { font-weight: 400; color: #94a3b8; margin-left: 8px; }
   font-size: 12px; color: #94a3b8; white-space: pre;
   background: transparent; margin: 0; padding: 0;
 }
-.readonly-banner {
-  background: #f59e0b; color: #1e293b; font-weight: 600;
-  text-align: center; padding: 8px 16px; font-size: 13px;
-}
 
 nav.tabs {
   display: flex; gap: 4px; padding: 0 24px;
@@ -42,13 +38,17 @@ nav.tabs button.active { color: #38bdf8; border-bottom-color: #38bdf8; }
   background: #1e293b; border: 1px solid #334155; border-radius: 8px;
   padding: 16px; margin-bottom: 24px; max-width: 900px;
 }
+.card h3 { margin-top: 0; color: #f1f5f9; font-size: 15px; }
 
 label { display: block; margin-bottom: 12px; font-size: 13px; color: #cbd5e1; }
+label small { display: block; color: #64748b; font-size: 11px; margin-top: 2px; font-weight: 400; }
+
 input, textarea, select {
   width: 100%; padding: 8px; background: #0f172a;
   border: 1px solid #334155; color: #e2e8f0; border-radius: 4px;
   font-family: ui-monospace, monospace; font-size: 13px;
 }
+input[type=number] { font-variant-numeric: tabular-nums; }
 textarea { resize: vertical; }
 
 button {
@@ -61,13 +61,14 @@ button.secondary { background: #475569; }
 button.secondary:hover { background: #334155; }
 button.danger { background: #dc2626; }
 button.danger:hover { background: #b91c1c; }
-button:disabled, button[disabled] {
+button:disabled, button[disabled],
+input:disabled, textarea:disabled, select:disabled {
   background: #334155 !important; color: #64748b !important;
-  cursor: not-allowed !important;
+  cursor: not-allowed !important; opacity: 0.7;
 }
 
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
-.locked { opacity: 0.7; }
+.locked { opacity: 0.85; }
 
 table {
   width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px;
@@ -89,22 +90,34 @@ td { color: #cbd5e1; }
 pre { background: #0f172a; padding: 12px; border-radius: 4px; overflow-x: auto; }
 code { background: #0f172a; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 
-/* ===== History toolbar + scroll ===== */
+/* Grid 2-kolom utk pasangan label-input di Config */
+.grid-row {
+  display: grid; grid-template-columns: 1fr 140px; gap: 12px;
+  align-items: center; padding: 6px 0; border-bottom: 1px dashed #334155;
+}
+.grid-row > span { display: flex; flex-direction: column; }
+
+/* Cache info banner di tab Config */
+.cache-info {
+  margin-top: 8px; padding: 10px 12px; border-radius: 6px;
+  font-size: 12px;
+}
+.cache-ok   { background: rgba(34,197,94,0.1); color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+.cache-over { background: rgba(220,38,38,0.15); color: #fca5a5; border: 1px solid rgba(220,38,38,0.4); }
+
+/* History toolbar + scroll */
 .history-toolbar {
   display: flex; gap: 8px; align-items: center;
   margin-bottom: 12px; flex-wrap: wrap;
 }
-.history-toolbar input {
-  flex: 1 1 320px; max-width: 600px;
-}
+.history-toolbar input { flex: 1 1 320px; max-width: 600px; }
 .history-scroll {
   max-height: 60vh; overflow: auto;
-  border: 1px solid #334155; border-radius: 8px;
-  background: #0f172a;
+  border: 1px solid #334155; border-radius: 8px; background: #0f172a;
 }
 .history-scroll table { margin-top: 0; }
 
-/* ===== Modal Konfirmasi ===== */
+/* Modal Konfirmasi */
 .modal {
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.65);

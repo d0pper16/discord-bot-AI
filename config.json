@@ -1,6 +1,6 @@
 {
+  "name": "Yanto",
   "keyword": "yanto",
-  "matchMode": "word",
   "cache": {
     "similarityThreshold": 0.82,
     "specificTriggers": [
@@ -18,7 +18,8 @@
   "gemini": {
     "rpmLimit": 14,
     "rpdLimit": 1400,
-    "cooldownMs": 60000
+    "cooldownMs": 30000,
+    "reserveTokens": 1
   },
   "history": {
     "maxContextMessages": 10
