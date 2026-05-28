@@ -1,0 +1,26 @@
+{
+  "keyword": "yanto",
+  "matchMode": "word",
+  "cache": {
+    "similarityThreshold": 0.82,
+    "specificTriggers": [
+      "lebih detail",
+      "lebih spesifik",
+      "lebih jelas",
+      "jelaskan lebih",
+      "perjelas",
+      "lebih lengkap",
+      "lebih rinci",
+      "detail dong",
+      "lebih panjang"
+    ]
+  },
+  "gemini": {
+    "rpmLimit": 14,
+    "rpdLimit": 1400,
+    "cooldownMs": 60000
+  },
+  "history": {
+    "maxContextMessages": 10
+  }
+}

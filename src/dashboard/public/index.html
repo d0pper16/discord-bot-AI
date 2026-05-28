@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yanto Dashboard</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>Yanto <small>Dashboard</small></h1>
+  <div id="status" class="status"></div>
+</header>
+
+<nav class="tabs">
+  <button data-tab="maps" class="active">Map Roblox DB</button>
+  <button data-tab="history">Riwayat Chat (Cache)</button>
+  <button data-tab="personality">Kepribadian Yanto</button>
+  <button data-tab="config">Config</button>
+  <button data-tab="upload">Upload Script</button>
+</nav>
+
+<!-- ====== MAPS ====== -->
+<section id="tab-maps" class="tab active">
+  <h2>Database Map Roblox</h2>
+  <form id="map-form" class="card">
+    <input type="hidden" name="id" />
+    <label>Topik / Nama Map<input name="topic" required></label>
+    <label>Tag (pisah koma)<input name="tags" placeholder="pvp, parkour, lobby"></label>
+    <label>Konten / Penjelasan<textarea name="content" rows="6" required></textarea></label>
+    <div class="row">
+      <button type="submit">Simpan</button>
+      <button type="button" id="map-reset">Reset</button>
+    </div>
+  </form>
+
+  <table id="map-table">
+    <thead><tr><th>ID</th><th>Topik</th><th>Tag</th><th>Aksi</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- ====== HISTORY ====== -->
+<section id="tab-history" class="tab">
+  <h2>Riwayat Chat (Cache)</h2>
+  <div class="row">
+    <button id="history-refresh">Refresh</button>
+    <button id="history-clear" class="danger">Hapus Semua</button>
+  </div>
+  <table id="history-table">
+    <thead><tr><th>ID</th><th>User</th><th>Tanya</th><th>Jawab</th><th>Sumber</th><th>Aksi</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<!-- ====== PERSONALITY ====== -->
+<section id="tab-personality" class="tab">
+  <h2>Kepribadian Yanto (personality.js)</h2>
+  <p class="hint">Edit di sini -> langsung dipakai bot tanpa restart.</p>
+  <textarea id="personality-editor" rows="22"></textarea>
+  <div class="row">
+    <button id="personality-save">Simpan</button>
+    <button id="personality-reload">Muat Ulang dari File</button>
+  </div>
+</section>
+
+<!-- ====== CONFIG ====== -->
+<section id="tab-config" class="tab">
+  <h2>config.json</h2>
+  <textarea id="config-editor" rows="22"></textarea>
+  <div class="row">
+    <button id="config-save">Simpan</button>
+    <button id="config-reload">Muat Ulang</button>
+  </div>
+</section>
+
+<!-- ====== UPLOAD ====== -->
+<section id="tab-upload" class="tab">
+  <h2>Upload Script (replace file)</h2>
+  <p class="hint">File akan menggantikan target di server. Hot-reload otomatis aktif.</p>
+  <form id="upload-form" class="card">
+    <label>Target
+      <select name="target" required>
+        <option value="personality">personality.js (Kepribadian)</option>
+        <option value="config">config.json</option>
+        <option value="bot">bot.js (script utama)</option>
+      </select>
+    </label>
+    <label>File<input type="file" name="file" required></label>
+    <button type="submit">Upload</button>
+  </form>
+  <pre id="upload-result"></pre>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
