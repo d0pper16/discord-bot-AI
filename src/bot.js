@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events, ActivityType } = require('discord.js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const log     = require('./utils/logger');
@@ -33,6 +33,8 @@ const LOGIN_RETRY_MS      = 5000;
 const CACHE_TTL_DAYS      = 30;
 const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1x per hari
 const FORCED_MAP_TTL_MS   = 30 * 60 * 1000; // reset counter setelah 30 menit idle
+const PRESENCE_INTERVAL_MS = 60 * 1000; // refresh activity status tiap 1 menit
+const PRESENCE_ROTATE_MS   = 12 * 1000; // rotasi info tiap 12 detik (5 frame/menit)
 
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
@@ -374,6 +376,8 @@ async function applyEnvUpdate(updates = {}) {
     SLEEPING = false;
     log.info('[env-update] semua valid -> bot WAKES UP, mengirim ucapan hello.');
     await sendToTargetChannel(MSG.hello(botName()));
+    // Update presence langsung supaya activity Discord refresh ke status aktif
+    try { await updatePresence(); } catch (_) {}
     return { ok: true, apiOk, chOk };
   } else {
     SLEEPING = true;
@@ -426,6 +430,9 @@ async function coldStartFlow() {
     // Auto-refresh validasi API tiap 1 menit (round-robin)
     gemini.startAutoRefresh();
 
+    // Discord Activity / Rich Presence -- tampil di profile bot
+    startPresenceLoop();
+
     return;
   }
 
@@ -454,6 +461,9 @@ async function restartFlow() {
       const uid = cfg.roblox && cfg.roblox.universeId ? String(cfg.roblox.universeId).trim() : '';
       robloxWatcher.start(uid);
     } catch (e) { log.warn('[restart] roblox watcher start error:', e.message); }
+    // Resume presence loop & API refresh after restart
+    startPresenceLoop();
+    gemini.startAutoRefresh();
   } else {
     log.error(`[restart] HIDUP TAPI TIDUR. API=${apiOk}, Channel=${chOk}. Tidak ucap "hoamm".`);
     SLEEPING = true;
@@ -467,6 +477,7 @@ async function gracefulRestart(reason = 'restart') {
   if (SHUTTING) return;
   SHUTTING = true; SLEEPING = true;
   log.info(`[restart] ${reason} -- silent exit, exit ${RESTART_QUIET_MS}ms lagi`);
+  stopPresenceLoop();
   setTimeout(() => {
     try { client.destroy(); } catch (_) {}
     process.exit(RESTART_EXIT_CODE);
@@ -477,6 +488,7 @@ async function gracefulShutdown(reason = 'shutdown') {
   if (SHUTTING) return;
   SHUTTING = true; SLEEPING = true;
   log.info(`[shutdown] ${reason} -- pamit + exit dalam ${SHUTDOWN_DELAY_MS}ms`);
+  stopPresenceLoop();
   try {
     await sendToTargetChannel(MSG.farewell(botName()));
   } catch (err) {
@@ -829,6 +841,152 @@ function start() {
   });
 }
 function stop() { return client.destroy(); }
+
+// =================================================================
+//  Discord Activity / Rich Presence
+//  Tampil di profile bot Discord:
+//    "Watching Map Name | 142 players online"
+//    "Playing Map Name | 5.2 jt visits"
+//    dst (rotasi tiap 12 detik)
+// =================================================================
+function fmtCompactID(n) {
+  if (typeof n !== 'number' || isNaN(n)) return '...';
+  if (n < 1000) return String(n);
+  const u = [
+    { v: 1e12, s: 't' },
+    { v: 1e9,  s: 'm' },
+    { v: 1e6,  s: 'jt' },
+    { v: 1e3,  s: 'rb' },
+  ];
+  for (const x of u) {
+    if (n >= x.v) {
+      const v = n / x.v;
+      const str = v >= 100 ? Math.floor(v).toString() : v.toFixed(1).replace(/\.0$/, '');
+      return str + ' ' + x.s;
+    }
+  }
+  return String(n);
+}
+
+let presenceTimer = null;
+let presenceFrame = 0;
+let presenceLoopBound = false;
+
+async function updatePresence() {
+  try {
+    if (!client.user) return;
+
+    // Kalau bot tidur (validasi gagal) -> set status DnD + activity diam
+    if (SLEEPING) {
+      await client.user.setPresence({
+        status: 'dnd',
+        activities: [{
+          type: ActivityType.Custom,
+          name: 'custom',
+          state: `${ucfirst(botName())} lagi tidur (cek dashboard)`,
+        }],
+      });
+      return;
+    }
+
+    const wstate = robloxWatcher.getStatus();
+
+    // Kalau watcher belum aktif (universe ID kosong) -> default activity
+    if (!wstate || !wstate.enabled) {
+      await client.user.setPresence({
+        status: 'online',
+        activities: [{
+          type: ActivityType.Custom,
+          name: 'custom',
+          state: `Sebut "${botKeyword()}" untuk tanya soal Roblox`,
+        }],
+      });
+      return;
+    }
+
+    // Watcher ON tapi belum ada data (initial fetch) -> "loading..."
+    if (wstate.playing == null && wstate.visits == null) {
+      await client.user.setPresence({
+        status: 'idle',
+        activities: [{
+          type: ActivityType.Watching,
+          name: wstate.name || 'Roblox map...',
+        }],
+      });
+      return;
+    }
+
+    // Watcher aktif + ada data -> rotate info tiap PRESENCE_ROTATE_MS
+    const mapName = wstate.name || 'Roblox';
+    const playing = wstate.playing != null ? fmtCompactID(wstate.playing) : '...';
+    const visits  = wstate.visits  != null ? fmtCompactID(wstate.visits)  : '...';
+    const fav     = wstate.favorited != null ? fmtCompactID(wstate.favorited) : '...';
+
+    // 5 frame rotasi info
+    const frames = [
+      // 1) Watching: nama map (utama)
+      {
+        type: ActivityType.Watching,
+        name: mapName,
+        state: `${playing} player online`,
+      },
+      // 2) Playing: total visits
+      {
+        type: ActivityType.Playing,
+        name: `${mapName}`,
+        state: `${visits} total visits`,
+      },
+      // 3) Watching: favorited count
+      {
+        type: ActivityType.Watching,
+        name: mapName,
+        state: `${fav} favorited`,
+      },
+      // 4) Custom: ringkasan ala "Quick Status"
+      {
+        type: ActivityType.Custom,
+        name: 'custom',
+        state: `${playing} online | ${visits} visits`,
+      },
+      // 5) Listening: hint sebut keyword
+      {
+        type: ActivityType.Listening,
+        name: `sebut "${botKeyword()}" buat tanya`,
+      },
+    ];
+
+    const frame = frames[presenceFrame % frames.length];
+    presenceFrame++;
+
+    await client.user.setPresence({
+      status: 'online',
+      activities: [frame],
+    });
+  } catch (err) {
+    log.warn('[presence] update error:', err.message);
+  }
+}
+
+function startPresenceLoop() {
+  if (presenceTimer) return;
+  // Initial set
+  updatePresence().catch(() => {});
+  // Rotate frame tiap 12 detik
+  presenceTimer = setInterval(() => updatePresence().catch(() => {}), PRESENCE_ROTATE_MS);
+  if (presenceTimer.unref) presenceTimer.unref();
+  // Refresh instant kalau Roblox watcher dapat data baru (bukan tunggu 12 dtk)
+  if (!presenceLoopBound) {
+    robloxWatcher.bus.on('update', () => {
+      updatePresence().catch(() => {});
+    });
+    presenceLoopBound = true;
+  }
+}
+
+function stopPresenceLoop() {
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = null;
+}
 
 module.exports = {
   client,

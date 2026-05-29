@@ -12,9 +12,15 @@
  *
  * Bila universeId KOSONG -> watcher OFF, semua field null.
  * Watcher restart otomatis bila start() dipanggil dengan ID baru.
+ *
+ * Event: emit 'update' tiap kali state berubah (untuk presence refresh).
  */
 
+const { EventEmitter } = require('events');
 const log = require('../utils/logger');
+
+const bus = new EventEmitter();
+bus.setMaxListeners(20);
 
 const PLAYER_INTERVAL_MS = 60 * 1000;          // 1 menit
 const VISITS_INTERVAL_MS = 60 * 60 * 1000;     // 1 jam
@@ -111,6 +117,7 @@ async function tickPlayer() {
     state.lastPlayingUpdate = Date.now();
     state.error = null;
     log.info(`[roblox] tick player: ${d.name || '?'} - ${d.playing} playing`);
+    bus.emit('update', { ...state });
   } catch (err) {
     state.error = err.message;
     state.lastErrorAt = Date.now();
@@ -125,6 +132,7 @@ async function tickVisits() {
     state.visits = typeof d.visits === 'number' ? d.visits : null;
     state.lastVisitsUpdate = Date.now();
     log.info(`[roblox] tick visits: ${(d.visits || 0).toLocaleString()} total visits`);
+    bus.emit('update', { ...state });
   } catch (_) {
     // error sudah di-log di tickPlayer
   }
@@ -193,4 +201,4 @@ function getStatus() {
   return { ...state };
 }
 
-module.exports = { start, stop, getStatus };
+module.exports = { start, stop, getStatus, bus };
