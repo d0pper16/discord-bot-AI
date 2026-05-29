@@ -2,67 +2,63 @@
 
 Bot Discord dengan kepribadian sendiri (default "Yanto", bisa di-rename),
 sumber jawaban dari database map Roblox (SQLite), 2 API key Gemini
-(utama + fallback), cache riwayat chat, rate-limit dance + spam timeout,
-auto-translate response, audit log, theme toggle, dan dashboard web
-realtime.
+(utama + fallback), cache jawaban, rate-limit dance + spam timeout,
+auto-translate jawaban AI, audit log, theme toggle, system monitor,
+server logs live, dan dashboard web realtime.
 
 ## Fitur Inti
 
-- **Persona dinamis & 1-identitas-tunggal**: nama bot diatur via Config Bot,
-  ganti nama otomatis menyebar ke keyword pemicu, sapaan, prompt, dan rewrite
-  cache. Tidak ada alias - identitas tunggal.
-- **Trigger** case-insensitive: hanya merespon di channel `YANTO_CHANNEL_ID`
-  yang mengandung kata `keyword` (DANDI / dandi / Dandi semua valid).
-- **Sumber kebenaran**: tabel `map_data` di SQLite. Bot dilarang mengarang.
-- **2 API Gemini bergiliran** dengan reserve token untuk balasan deferred.
-- **Cache jawaban** dengan exact + Jaccard similarity, replace pada follow-up "lebih detail".
-- **Rate-limit dance**: sabar -> warn -> Discord-timeout 5 menit pada spam ke-3.
-- **Cold start validate**: 5 detik delay -> validate Gemini -> "halo, kenalin..." atau "maaf yah, token salah".
-- **Restart silent** (no farewell): bot diam total ~3 detik -> respawn -> "hoamm... enak banget {nama} tidurnya...".
-- **Shutdown total** (tombol di dashboard): bot ucap pamit -> mati. Dashboard ikut mati.
-- **Auto-translate**: bot deteksi bahasa user (id/en/pt) dan jawab dalam bahasa tersebut. Bahasa Indonesia default; foreign language harus dominan supaya translate. Pesan boilerplate (sabar/warn/timeout/empty/errorApi) ada terjemahan natif. Pesan broadcast (hello/back/farewell) pakai bahasa channel hasil deteksi 30 pesan terakhir non-bot.
-- **Dashboard web** dengan 2 role:
-  - `dev` / `devtbiapril2026` -> full administrator.
-  - `admin` / `admintbi2025` -> read-only (tombol disabled, tetap visible).
-  - Setiap aksi tulis butuh re-konfirmasi user/pass dev (modal).
-- **Audit Log**: semua aksi tulis tercatat (user, action, target, details, waktu).
-  Read-only untuk semua role.
-- **Theme toggle**: dark/light, simpan di localStorage.
-- **DB Backup**: export semua tabel `map_data` + `chat_history` ke JSON.
-  Import dengan mode merge atau replace.
-- **File Manager**: edit, tambah, hapus file project apa pun (text only).
-  Save bot.js trigger auto-restart. Levenshtein typo guard saat upload.
-- **Restart/Shutdown buttons** di header dashboard. Auto-restart juga otomatis
-  saat upload bot.js / save bot.js via File Manager.
+- **Persona dinamis & 1-identitas-tunggal**: rename otomatis menyebar ke keyword + sapaan + prompt + cache.
+- **Trigger** case-insensitive (DANDI/dandi/Dandi).
+- **Sumber kebenaran**: tabel `map_data` di SQLite.
+- **2 API Gemini**: PRIMARY prioritas, SECONDARY fallback, reserve token untuk deferred.
+- **Cache** dengan exact + Jaccard similarity, replace pada follow-up "lebih detail".
+- **Rate-limit dance**: sabar -> warn -> Discord-timeout 5 menit.
+- **Validasi cold-start**: 5dtk delay -> validate Gemini + Channel -> "halo, kenalin..." atau bot SLEEPING.
+- **Login Discord retry** 3x kalau token salah/error/kosong, lalu exit.
+- **Auto-translate jawaban AI** (id/en/pt). Boilerplate (hello/back/farewell/sabar/warn/timeout/empty/errorApi/apiFail) **selalu Indonesia**.
+- **Restart silent** (no farewell): bot diam total ~3 detik -> respawn -> "hoamm...".
+- **Shutdown total** (tombol di dashboard): bot ucap pamit -> mati.
+- **Dashboard 11 tab** dengan 2 role (dev/admin).
+- **System Monitor** realtime: RAM, CPU, Disk (debounce 1%), bot process.
+- **Server Logs live** (polling 1.5s, buffer 1000 baris, filter level + substring).
+- **Connection editor**: ubah Channel ID + 2 API key tanpa edit .env.
+- **Audit Log**: setiap aksi tulis tercatat.
+- **Theme toggle**: dark/light, persist di localStorage.
+- **DB Backup**: export/import map_data + chat_history.
+- **File Manager**: edit/tambah/hapus file project, atomic write, typo guard.
+- **Auto-restart** saat upload bot.js / save bot.js via File Manager.
 
 ## Struktur
 
 ```
 discord-bot-AI/
 ├── runner.js               supervisor: respawn pada exit code 42
-├── package.json            "start": "node runner.js"
-├── config.json             tuning runtime (di-edit lewat dashboard form)
+├── package.json
+├── config.json             tuning runtime (di-edit lewat dashboard)
 ├── .env.example
 ├── data/
-│   └── bot.db              SQLite (map_data, chat_history, api_usage, audit_log)
+│   ├── bot.db              SQLite (map_data, chat_history, api_usage, audit_log)
+│   └── runtime.json        override channel + API keys (dari dashboard)
 └── src/
-    ├── index.js            entry: dashboard + bot + watcher
-    ├── bot.js              Discord handler (sleeping, sabar, spam timeout, translation)
+    ├── index.js            entry: load runtime override -> dashboard -> bot
+    ├── bot.js              Discord handler: login retry, validation, rate-limit
     ├── ai/
-    │   ├── gemini.js       rotasi 2 API + allowReserve + validate()
-    │   ├── personality.js  persona (parameterized by name & lang)
-    │   └── lang.js         language detection + translation tables (id/en/pt)
+    │   ├── gemini.js       2 API rotation + reserve + lastUsedKey
+    │   ├── personality.js  persona (parameterized name + lang)
+    │   └── lang.js         language detection (id/en/pt) untuk prompt AI
     ├── db/
-    │   ├── database.js     init SQLite (WAL) - 4 tabel
-    │   ├── mapData.js      CRUD map Roblox + buildContext
-    │   ├── chatHistory.js  cache + Jaccard similarity + search
-    │   └── audit.js        audit log helper
+    │   ├── database.js     init SQLite (4 tabel)
+    │   ├── mapData.js      CRUD map
+    │   ├── chatHistory.js  cache + Jaccard
+    │   └── audit.js        audit log
     ├── dashboard/
-    │   ├── server.js       REST API (role + confirm + audit + DB export/import)
-    │   └── public/         UI (8 tab: Maps/Personality/Config/Files/Upload/History/Audit/Backup)
+    │   ├── server.js       REST API
+    │   └── public/         UI (11 tab)
     └── utils/
-        ├── hotReload.js    chokidar + bus event
-        └── logger.js
+        ├── hotReload.js
+        ├── logger.js       console intercept + buffer + subscribers
+        └── runtimeEnv.js   load/save data/runtime.json
 ```
 
 ## Setup (one-time, mesin baru)
@@ -70,66 +66,81 @@ discord-bot-AI/
 ```bash
 cd discord-bot-AI
 cp .env.example .env
-# edit .env -> isi DISCORD_TOKEN, YANTO_CHANNEL_ID, GEMINI_API_KEY_*
+# .env wajib: DISCORD_TOKEN. YANTO_CHANNEL_ID + GEMINI_API_KEY_*
+# bisa diisi di sini atau diatur dari dashboard tab "Connection".
 npm install
 npm start
 ```
 
-Dashboard: `http://localhost:3000`. Setelah ini, **semua via dashboard**
-(restart/shutdown/edit/upload). CLI hanya perlu kalau full shutdown
-& mau menyalakan kembali.
+Dashboard: `http://localhost:3000`. Login dev / devtbiapril2026 atau admin / admintbi2025.
 
-## Config Bot Fields (semua min/max divalidasi server-side)
+## Validasi & State Machine Bot
 
-| Field | Min | Max | Default | Keterangan |
-|---|---|---|---|---|
-| Nama Bot | 2 | 20 | Yanto | Identitas tunggal. Rename = ganti keyword + cache rewrite. |
-| RPM Limit | **5** | **14** | 14 | Request/menit per key (sesuai tier free Gemini Flash). |
-| **RPD Limit** | - | - | **995 (locked)** | **Tidak bisa diubah dari dashboard** demi keamanan kuota harian. |
-| Cooldown switch API | 10 dtk | 300 dtk | 30 dtk | UI: detik. File: ms. |
-| Reserve token | 0 | 3 | 1 | Untuk balasan deferred. Harus < RPM. |
-| Threshold cache | 0.5 | 1.0 | 0.82 | Jaccard similarity. |
-| Memori pesan | 0 | 30 | 10 | Q/A terakhir kirim ke AI. |
-| Pemicu detail | - | 50 item | preset | 1 frasa per baris. |
+```
+[index.js mulai]
+   |
+   v
+[runtime.load()]  <- merge data/runtime.json ke process.env
+   |
+   v
+[dashboard.start]
+   |
+   v
+[bot.loginWithRetry(3x)] <- token Discord salah/error/kosong -> exit setelah 3x gagal
+   |  ok
+   v
+[ClientReady]
+   |  cold start (5s delay)
+   v
+[validate Gemini] -> retry 1x
+[validate Channel ID]
+   |
+   +-- BOTH ok    -> SLEEPING=false, kirim "halo, kenalin..."
+   +-- SALAH 1+   -> log ke console, SLEEPING=true (HIDUP TAPI TIDUR)
+                    Bot tidak respon apa-apa sampai diperbaiki via dashboard.
+```
 
-Bot yang menulis config.json - dashboard cuma perantara. Penulisan **atomic**
-(`.tmp` -> `rename`).
+Saat user fix via tab "Connection":
+1. Server validasi nilai baru (test Gemini key + fetch channel).
+2. Kalau valid: persist ke `data/runtime.json` + apply ke `process.env`.
+3. Re-validate keseluruhan -> kalau both OK -> SLEEPING=false + kirim "halo, kenalin..." (BUKAN back/farewell).
 
-## Login Dashboard
+## Auto-translate
 
-| Role | User | Pass | Hak |
-|------|------|------|-----|
-| dev | `dev` | `devtbiapril2026` | Full edit/upload/hapus |
-| admin | `admin` | `admintbi2025` | Read-only |
-
-Tombol **Restart Bot** & **Matikan Bot** tetap visible untuk admin tapi
-disabled (sesuai req: "tetap ada pada user admin yang masuk, tetapi
-tidak dapat digunakan").
-
-## Auto-translate (id/en/pt)
-
-- Deteksi: stopword-counting heuristic. Bahasa Indonesia default,
-  hanya translate kalau foreign language **dominan** (id < 70% best, dan best >= 15%).
-- AI answer: prompt mengandung instruksi "respond in {detected language}".
-- Boilerplate (sabar/warn/timeout/empty/errorApi): tabel terjemahan natif.
-- Broadcast (hello/back/farewell): deteksi dari 30 pesan terakhir non-bot di channel target. Hasil di-cache untuk durasi sesi.
+- Hanya untuk **jawaban AI** (Gemini diberi prompt instruction).
+- Boilerplate (sabar/warn/timeout/empty/errorApi/hello/back/farewell/apiFail) **selalu Indonesia**.
+- Auto: deteksi bahasa user via stopwords, threshold 70% (Indonesian benefit-of-the-doubt).
 
 ## Permission Discord
 
-Bot **butuh permission `Moderate Members`** untuk timeout user 5 menit.
-Kalau bot sudah punya **`Administrator`**, tidak perlu config tambahan
-(Administrator supersede semua permission lain). Pastikan role bot
-**lebih tinggi** dari role user yang akan di-timeout.
+Bot pakai permission `Administrator` -> sudah cukup (Administrator supersede semua permission). Pastikan role bot lebih tinggi dari role user yang akan di-timeout.
 
-## DB Backup
+## Login Dashboard
 
-- **Export** (semua role): tab "Backup DB" -> Download backup .json.
-  File berisi `map_data` + `chat_history` lengkap.
-- **Import** (dev only): pilih file JSON, pilih mode `merge` atau `replace`,
-  centang tabel mana saja. Modal Yes/No untuk konfirmasi `replace`.
+| Role | User | Pass | Akses |
+|------|------|------|-------|
+| dev   | `dev`   | `devtbiapril2026` | Full edit/upload/restart/shutdown |
+| admin | `admin` | `admintbi2025`    | Read-only (tombol disabled, banner none) |
 
-## Audit Log
+Semua aksi tulis butuh re-konfirmasi user/pass dev (modal).
 
-Tab "Audit Log" menampilkan setiap aksi tulis: rename config, edit personality,
-upload file, CRUD map, edit/hapus history, restart, shutdown, import DB.
-Tidak bisa dihapus untuk menjaga jejak audit.
+## Config Bot Fields
+
+| Field | Min | Max | Default | Catatan |
+|---|---|---|---|---|
+| Nama Bot | 2 | 20 | Yanto | Identitas tunggal. |
+| RPM Limit | 5 | 14 | 14 | request/menit per key. |
+| **RPD Limit** | - | - | **995 (locked)** | Tidak bisa diubah dari dashboard. |
+| Cooldown switch API | 10dtk | 300dtk | 30dtk | UI: detik. File: ms. |
+| Reserve token | 0 | 3 | 1 | Untuk balasan deferred. |
+| Threshold cache | 0.5 | 1.0 | 0.82 | Jaccard. |
+| Memori pesan | 0 | 30 | 10 | Q/A terakhir kirim ke AI. |
+| Pemicu detail | - | 50 | preset | 1 frasa/baris. |
+
+## System Monitor
+
+Poll 2s. Disk: hanya update DOM kalau perubahan >= 1% dari kapasitas total (req. user).
+- RAM (system) + RAM (process)
+- CPU process %
+- Disk %
+- Gemini API usage 2 key + indikator key aktif

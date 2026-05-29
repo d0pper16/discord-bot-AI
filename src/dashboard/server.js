@@ -1,6 +1,7 @@
 'use strict';
 
 const fs        = require('fs');
+const os        = require('os');
 const path      = require('path');
 const crypto    = require('crypto');
 const express   = require('express');
@@ -13,6 +14,7 @@ const cache   = require('../db/chatHistory');
 const gemini  = require('../ai/gemini');
 const audit   = require('../db/audit');
 const db      = require('../db/database');
+const runtime = require('../utils/runtimeEnv');
 const { bus } = require('../utils/hotReload');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -301,6 +303,45 @@ function atomicWriteFile(absPath, buf) {
 // =================================================================
 //  start()
 // =================================================================
+// =================================================================
+//  System monitor (CPU sample window)
+// =================================================================
+let cpuSnapshot = process.cpuUsage();
+let cpuSnapshotTime = process.hrtime.bigint();
+let CURRENT_CPU_PERCENT = 0;
+
+setInterval(() => {
+  try {
+    const cur = process.cpuUsage();
+    const now = process.hrtime.bigint();
+    const elapsedMicros = Number(now - cpuSnapshotTime) / 1000;
+    const cpuMicros = (cur.user - cpuSnapshot.user) + (cur.system - cpuSnapshot.system);
+    CURRENT_CPU_PERCENT = elapsedMicros > 0
+      ? Math.min(100, Math.max(0, (cpuMicros / elapsedMicros) * 100))
+      : 0;
+    cpuSnapshot = cur;
+    cpuSnapshotTime = now;
+  } catch (_) {}
+}, 2000).unref();
+
+function diskUsage() {
+  try {
+    if (typeof fs.statfsSync === 'function') {
+      const s = fs.statfsSync(__dirname);
+      const blockSize = Number(s.bsize);
+      const total = blockSize * Number(s.blocks);
+      const free = blockSize * Number(s.bfree || s.bavail || 0);
+      const used = total - free;
+      return {
+        total, used, free,
+        percent: total > 0 ? (used / total) * 100 : 0,
+        method: 'statfs',
+      };
+    }
+  } catch (e) { /* fallback below */ }
+  return { total: 0, used: 0, free: 0, percent: 0, method: 'unavailable' };
+}
+
 function start() {
   const app = express();
   const port = Number(process.env.DASHBOARD_PORT || 3000);
@@ -317,11 +358,62 @@ function start() {
     res.json({
       ok: true,
       role: req.role,
-      gemini: gemini.status(),
+      gemini: { ...gemini.status(), lastUsedKey: gemini.lastUsedKey() },
       env: {
         channelId: process.env.YANTO_CHANNEL_ID || null,
         model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
       },
+    });
+  });
+
+  // ---- System Monitor ----
+  app.get('/api/system', (_req, res) => {
+    const totalMem = os.totalmem();
+    const freeMem  = os.freemem();
+    const usedMem  = totalMem - freeMem;
+    const procMem  = process.memoryUsage();
+    const cores    = os.cpus().length || 1;
+    const loadAvg  = os.loadavg();
+    res.json({
+      uptime:  Math.floor(process.uptime()),
+      uptimeOs: Math.floor(os.uptime()),
+      memory: {
+        total: totalMem, used: usedMem, free: freeMem,
+        percent: (usedMem / totalMem) * 100,
+        process: {
+          rss: procMem.rss,
+          heapUsed: procMem.heapUsed,
+          heapTotal: procMem.heapTotal,
+          external: procMem.external,
+        },
+      },
+      cpu: {
+        cores,
+        processPercent: CURRENT_CPU_PERCENT,
+        loadAvg,
+        loadPercent: Math.min(100, (loadAvg[0] / cores) * 100),
+      },
+      disk: diskUsage(),
+      gemini: { ...gemini.status(), lastUsedKey: gemini.lastUsedKey() },
+      proc: { pid: process.pid, node: process.version, platform: process.platform },
+    });
+  });
+
+  // ---- Server Logs (polling) ----
+  app.get('/api/logs', (req, res) => {
+    const since = Number(req.query.since) || 0;
+    res.json({ now: Date.now(), entries: log.getBuffer(since) });
+  });
+
+  // ---- Connection (channel + 2 API key) -- read masked ----
+  app.get('/api/connection', (_req, res) => {
+    const rt = runtime.readFile();
+    res.json({
+      channelId:    process.env.YANTO_CHANNEL_ID || '',
+      primaryMask:  runtime.maskKey(process.env.GEMINI_API_KEY_PRIMARY),
+      secondaryMask: runtime.maskKey(process.env.GEMINI_API_KEY_SECONDARY),
+      hasOverrides: !!Object.keys(rt).length,
+      overrideFile: 'data/runtime.json',
     });
   });
 
@@ -472,6 +564,37 @@ function start() {
     audit.log(req.auth.user, 'system.shutdown', 'process', '');
     setTimeout(() => bus.emit('shutdown'), 500);
     res.json({ ok: true, action: 'shutdown' });
+  });
+
+  // ----------- Connection update (channel + API keys) -----------
+  app.put('/api/connection', requireDev, requireConfirm, async (req, res) => {
+    try {
+      const bot = require('../bot');
+      const updates = {};
+      if (typeof req.body.channelId === 'string'    && req.body.channelId.trim())    updates.channelId    = req.body.channelId.trim();
+      if (typeof req.body.primaryKey === 'string'   && req.body.primaryKey.trim())   updates.primaryKey   = req.body.primaryKey.trim();
+      if (typeof req.body.secondaryKey === 'string' && req.body.secondaryKey.trim()) updates.secondaryKey = req.body.secondaryKey.trim();
+
+      if (!Object.keys(updates).length) {
+        return res.status(400).json({ error: 'minimal 1 field harus diisi' });
+      }
+
+      // Step 1: Validasi tanpa modifikasi env
+      const v = await bot.validateNewValues(updates);
+      if (!v.ok) {
+        log.warn('[connection] validasi gagal:', JSON.stringify(v.errors));
+        return res.status(400).json({ ok: false, errors: v.errors });
+      }
+
+      // Step 2: Apply (persist + reload validation + send hello)
+      const r = await bot.applyEnvUpdate(updates);
+      audit.log(req.auth.user, 'connection.update', 'runtime',
+        JSON.stringify({ fields: Object.keys(updates), apiOk: r.apiOk, chOk: r.chOk }));
+      res.json({ ok: r.ok, apiOk: r.apiOk, chOk: r.chOk });
+    } catch (e) {
+      log.error('[connection] error:', e);
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ----------- File Manager: simpan (edit) file existing -----------

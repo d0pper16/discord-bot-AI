@@ -2,12 +2,14 @@
 
 const path = require('path');
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const log     = require('./utils/logger');
 const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
-const { detectLang, tr } = require('./ai/lang');
+const runtime = require('./utils/runtimeEnv');
+const { detectLang } = require('./ai/lang');
 const { bus } = require('./utils/hotReload');
 
 // ---- konstanta path ----
@@ -16,13 +18,15 @@ const personalityPath = path.join(__dirname, 'ai', 'personality.js');
 
 const RESTART_EXIT_CODE   = 42;
 const SHUTDOWN_EXIT_CODE  = 0;
-const RESTART_QUIET_MS    = 2500;   // RESTART: jeda kecil sebelum exit (TANPA pesan pamit)
-const SHUTDOWN_DELAY_MS   = 5000;   // SHUTDOWN: jeda setelah ucap pamit
-const WAKEUP_DELAY_MS     = 4000;   // jeda setelah online (restart) baru ucap "hoamm"
-const COLD_DELAY_MS       = 5000;   // jeda cold-start sebelum validasi API
-const COLD_RETRY_MS       = 30000;  // jeda retry validasi API
-const SABAR_WAIT_MS       = 60000;  // jeda "sabar 1 menit" sebelum coba jawab pakai reserve
-const TIMEOUT_DURATION_MS = 5 * 60 * 1000; // 5 menit timeout user
+const RESTART_QUIET_MS    = 2500;
+const SHUTDOWN_DELAY_MS   = 5000;
+const WAKEUP_DELAY_MS     = 4000;
+const COLD_DELAY_MS       = 5000;
+const COLD_RETRY_MS       = 30000;
+const SABAR_WAIT_MS       = 60000;
+const TIMEOUT_DURATION_MS = 5 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS  = 3;
+const LOGIN_RETRY_MS      = 5000;
 
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
@@ -32,60 +36,32 @@ function loadPersonality() {
   delete require.cache[require.resolve(personalityPath)];
   return require(personalityPath);
 }
-function botName() {
-  try { return loadCfg().name || 'Yanto'; }
-  catch (_) { return 'Yanto'; }
-}
-function botKeyword() {
-  try { return loadCfg().keyword || 'yanto'; }
-  catch (_) { return 'yanto'; }
-}
-const ucfirst = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-const lower   = (s) => s.toLowerCase();
+function botName()   { try { return loadCfg().name || 'Yanto'; } catch (_) { return 'Yanto'; } }
+function botKeyword(){ try { return loadCfg().keyword || 'yanto'; } catch (_) { return 'yanto'; } }
+const ucfirst = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase();
+const lower   = (s) => String(s).toLowerCase();
 
-// ---- template pesan (semua memakai nama dinamis) ----
-// ---- template pesan: hanya wrapper translation ----
+// ---- pesan boilerplate (selalu Indonesia, sesuai req. user) ----
 const MSG = {
-  hello:    (n, lang = 'id')        => tr('hello',    lang, n),
-  back:     (n, lang = 'id')        => tr('back',     lang, n),
-  farewell: (n, lang = 'id')        => tr('farewell', lang, n),
-  apiFail:  (_n, lang = 'id')       => tr('apiFail',  lang),
-  sabar:    (_n, lang = 'id')       => tr('sabar',    lang),
-  warn:     (n, mention, lang='id') => tr('warn',     lang, n, mention),
-  timeout:  (n, mention, lang='id') => tr('timeout',  lang, n, mention),
-  empty:    (n, lang = 'id')        => tr('empty',    lang, n),
-  errorApi: (lang = 'id')           => tr('errorApi', lang),
+  hello:    (n) => `halo, kenalin aku ${lower(n)} aku adalah AI paling ganteng sedunia, yang siap membantu menjawab pertanyaan kalian di server ini, tinggal sebut aja namaku "${lower(n)}" maka aku akan menjawab semua pertanyaan kalian`,
+  back:     (n) => `hoamm... enak banget ${lower(n)} tidurnya walau gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone`,
+  farewell: (n) => `${ucfirst(n)} capek, ${lower(n)} tidur dulu yaa, babay semua... @everyone`,
+  apiFail:  ()  => `maaf yah, token/API kamu salah/error nih, aku gagal mendarat`,
+  sabar:    ()  => `sabar ya kak, kasih aku mikir dulu 1 menit yaa`,
+  warn:     (n, m) => `jika kamu tidak bisa bersabar maka akan ${lower(n)} bungkam ya ${m}`,
+  timeout:  (n, m) => `maaf yah ${m} ${lower(n)} bungkam, kamu gasabaran sih jadi manusia, ${lower(n)} robot bukan nabi boyyy...`,
+  empty:    (n) => `iya, ada apa? tanya aja, sebut "${lower(n)}" + pertanyaannya.`,
+  errorApi: ()  => `aduh otak gue lagi nge-lag (API error). coba lagi sebentar yaa.`,
 };
 
-// channel-level cached language untuk pesan broadcast (hello/back/farewell)
-let CHANNEL_LANG = 'id';
-async function refreshChannelLang() {
-  const id = process.env.YANTO_CHANNEL_ID;
-  if (!id) return;
-  try {
-    const ch = await client.channels.fetch(id);
-    if (!ch || !ch.isTextBased()) return;
-    const msgs = await ch.messages.fetch({ limit: 30 });
-    const text = Array.from(msgs.values())
-      .filter((m) => !m.author.bot && m.content && m.content.length > 5)
-      .map((m) => m.content)
-      .join(' ');
-    if (text.length > 50) {
-      const lng = detectLang(text);
-      CHANNEL_LANG = lng;
-      log.info(`[lang] channel language detected: ${lng}`);
-    }
-  } catch (err) {
-    log.warn('[lang] gagal deteksi channel:', err.message);
-  }
-}
-
 // ---- state ----
-let SLEEPING = false; // saat true: bot SAMA SEKALI tidak merespon
+let SLEEPING = true;
 let READY    = false;
 let SHUTTING = false;
-const WAITING  = new Map(); // userId -> { count, ts, handle, question, msg }
-const TIMEOUTS = new Map(); // userId -> untilTs
+let API_OK   = false;
+let CHAN_OK  = false;
+const WAITING  = new Map();
+const TIMEOUTS = new Map();
 
 // ---- discord client ----
 const client = new Client({
@@ -147,76 +123,195 @@ function isUserTimedOut(userId) {
 }
 
 // =================================================================
-//  Cold-start validasi & ucapan
+//  Validators
+// =================================================================
+async function validateGeminiInternal() {
+  const v = await gemini.validate();
+  if (!v.ok) {
+    log.error('[validation] semua API Gemini gagal divalidasi (cek token primary & secondary)');
+    return false;
+  }
+  log.info(`[validation] Gemini OK via ${v.keyId}`);
+  return true;
+}
+
+async function validateChannelInternal() {
+  const id = process.env.YANTO_CHANNEL_ID;
+  if (!id) {
+    log.error('[validation] YANTO_CHANNEL_ID kosong - cek dashboard atau .env');
+    return false;
+  }
+  if (!/^\d{17,20}$/.test(String(id))) {
+    log.error(`[validation] YANTO_CHANNEL_ID format salah: "${id}" (harus 17-20 digit Discord snowflake)`);
+    return false;
+  }
+  try {
+    const ch = await client.channels.fetch(String(id));
+    if (!ch) {
+      log.error(`[validation] Channel ID ${id} tidak ditemukan / bot tidak ada di guild itu`);
+      return false;
+    }
+    if (!ch.isTextBased()) {
+      log.error(`[validation] Channel ${id} bukan text channel`);
+      return false;
+    }
+    log.info(`[validation] Channel ${id} OK (${ch.name || 'unknown'})`);
+    return true;
+  } catch (err) {
+    log.error(`[validation] gagal fetch channel ${id}: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Validasi NEW values (dipakai endpoint dashboard sebelum apply).
+ * Tidak modifikasi process.env -- test langsung dengan input.
+ */
+async function validateNewValues({ channelId, primaryKey, secondaryKey } = {}) {
+  const errors = {};
+  const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+
+  async function testKey(key) {
+    if (!key || String(key).trim().length < 10) return 'API key kosong / terlalu pendek';
+    try {
+      const ai = new GoogleGenerativeAI(String(key));
+      const m = ai.getGenerativeModel({ model });
+      const r = await m.generateContent('ok');
+      r.response.text();
+      return null;
+    } catch (err) {
+      return err.message || 'unknown error';
+    }
+  }
+
+  if (primaryKey !== undefined && primaryKey !== null) {
+    const e = await testKey(primaryKey);
+    if (e) errors.primaryKey = e;
+  }
+  if (secondaryKey !== undefined && secondaryKey !== null) {
+    const e = await testKey(secondaryKey);
+    if (e) errors.secondaryKey = e;
+  }
+  if (channelId !== undefined && channelId !== null) {
+    const id = String(channelId).trim();
+    if (!id) errors.channelId = 'Channel ID kosong';
+    else if (!/^\d{17,20}$/.test(id)) errors.channelId = 'Channel ID format salah (harus 17-20 digit)';
+    else {
+      try {
+        const ch = await client.channels.fetch(id);
+        if (!ch) errors.channelId = 'Channel tidak ditemukan / bot tidak di guild';
+        else if (!ch.isTextBased()) errors.channelId = 'Channel bukan text channel';
+      } catch (err) {
+        errors.channelId = err.message || 'fetch error';
+      }
+    }
+  }
+  return { ok: Object.keys(errors).length === 0, errors };
+}
+
+// =================================================================
+//  Apply env update dari dashboard
+//   - Validate via validateNewValues() DULU di endpoint
+//   - Persist ke runtime.json + update process.env
+//   - Re-validate API & channel
+//   - Send hello bila semua ok (req. user)
+// =================================================================
+async function applyEnvUpdate(updates = {}) {
+  const persistKey = {};
+  if (typeof updates.channelId === 'string')    persistKey.YANTO_CHANNEL_ID = updates.channelId;
+  if (typeof updates.primaryKey === 'string')   persistKey.GEMINI_API_KEY_PRIMARY = updates.primaryKey;
+  if (typeof updates.secondaryKey === 'string') persistKey.GEMINI_API_KEY_SECONDARY = updates.secondaryKey;
+
+  runtime.save(persistKey);
+  log.info(`[env-update] runtime.json updated: ${Object.keys(persistKey).join(', ')}`);
+
+  // Re-validate seluruhnya
+  const apiOk = await validateGeminiInternal();
+  const chOk  = await validateChannelInternal();
+  API_OK = apiOk;
+  CHAN_OK = chOk;
+
+  if (apiOk && chOk) {
+    SLEEPING = false;
+    log.info('[env-update] semua valid -> bot WAKES UP, mengirim ucapan hello.');
+    await sendToTargetChannel(MSG.hello(botName()));
+    return { ok: true, apiOk, chOk };
+  } else {
+    SLEEPING = true;
+    log.error(`[env-update] masih ada yang salah (apiOk=${apiOk}, chOk=${chOk}). Bot hidup tapi TIDUR.`);
+    return { ok: false, apiOk, chOk };
+  }
+}
+
+// =================================================================
+//  Cold start & restart
 // =================================================================
 async function coldStartFlow() {
-  log.info(`[startup] cold start, validasi Gemini dalam ${COLD_DELAY_MS}ms...`);
+  log.info(`[startup] cold start, validasi dalam ${COLD_DELAY_MS}ms...`);
   await new Promise((r) => setTimeout(r, COLD_DELAY_MS));
 
-  await refreshChannelLang();
+  let apiOk = await validateGeminiInternal();
+  if (!apiOk) {
+    log.warn(`[startup] retry API dalam ${COLD_RETRY_MS}ms`);
+    await new Promise((r) => setTimeout(r, COLD_RETRY_MS));
+    apiOk = await validateGeminiInternal();
+  }
+  const chOk = await validateChannelInternal();
+  API_OK = apiOk;
+  CHAN_OK = chOk;
 
-  // attempt 1
-  let v = await gemini.validate();
-  if (v.ok) {
-    log.info(`[startup] Gemini OK via ${v.keyId}`);
+  if (apiOk && chOk) {
     SLEEPING = false;
-    await sendToTargetChannel(MSG.hello(botName(), CHANNEL_LANG));
+    log.info('[startup] validasi OK -> bot active, mengirim ucapan hello.');
+    await sendToTargetChannel(MSG.hello(botName()));
     return;
   }
 
-  log.error('[startup] validasi Gemini GAGAL (attempt 1)');
-  await sendToTargetChannel(MSG.apiFail(botName(), CHANNEL_LANG));
-
-  // attempt 2 (retry sekali setelah 30s)
-  await new Promise((r) => setTimeout(r, COLD_RETRY_MS));
-  v = await gemini.validate();
-  if (v.ok) {
-    log.info(`[startup] Gemini OK via ${v.keyId} (attempt 2)`);
-    SLEEPING = false;
-    await sendToTargetChannel(MSG.hello(botName(), CHANNEL_LANG));
-    return;
-  }
-
-  log.error('[startup] validasi Gemini gagal total. Bot tetap halt sampai .env diperbaiki & restart.');
+  // Hanya 1 dari (API, channel) yang error -> bot tetap hidup tapi tidur.
+  log.error(
+    `[startup] HIDUP TAPI TIDUR. API valid=${apiOk}, Channel valid=${chOk}. ` +
+    `Bot tidak akan merespon perintah. Perbaiki via tab "Connection" di dashboard, ` +
+    `lalu bot otomatis bangun & ucap hello.`
+  );
+  SLEEPING = true;
 }
 
 async function restartFlow() {
-  log.info('[startup] restart detected, jeda lalu sapa kembali...');
+  log.info('[startup] restart detected, jeda lalu bangun...');
   await new Promise((r) => setTimeout(r, WAKEUP_DELAY_MS));
-  await refreshChannelLang();
-  SLEEPING = false;
-  await sendToTargetChannel(MSG.back(botName(), CHANNEL_LANG));
+  // Validasi tetap dijalankan supaya bot tahu kondisi env saat ini
+  const apiOk = await validateGeminiInternal();
+  const chOk  = await validateChannelInternal();
+  API_OK = apiOk;
+  CHAN_OK = chOk;
+  if (apiOk && chOk) {
+    SLEEPING = false;
+    await sendToTargetChannel(MSG.back(botName()));
+  } else {
+    log.error(`[restart] HIDUP TAPI TIDUR. API=${apiOk}, Channel=${chOk}. Tidak ucap "hoamm".`);
+    SLEEPING = true;
+  }
 }
 
 // =================================================================
-//  Graceful restart (TANPA pesan pamit - permintaan user)
-//  Dipicu: upload bot.js, atau tombol "Restart" di dashboard.
+//  Graceful restart (silent) & shutdown (with farewell)
 // =================================================================
 async function gracefulRestart(reason = 'restart') {
   if (SHUTTING) return;
-  SHUTTING = true;
-  SLEEPING = true; // langsung diam total, tidak terima pesan baru
-  log.info(`[restart] ${reason} -- silent exit (no farewell), exit ${RESTART_QUIET_MS}ms lagi`);
-
-  // Jeda pendek supaya in-flight HTTP/Discord op bisa selesai.
+  SHUTTING = true; SLEEPING = true;
+  log.info(`[restart] ${reason} -- silent exit, exit ${RESTART_QUIET_MS}ms lagi`);
   setTimeout(() => {
     try { client.destroy(); } catch (_) {}
     process.exit(RESTART_EXIT_CODE);
   }, RESTART_QUIET_MS);
 }
 
-// =================================================================
-//  Graceful shutdown total (ucap pamit, tidak respawn)
-//  Dipicu: tombol "Matikan Bot" di dashboard.
-// =================================================================
 async function gracefulShutdown(reason = 'shutdown') {
   if (SHUTTING) return;
-  SHUTTING = true;
-  SLEEPING = true;
+  SHUTTING = true; SLEEPING = true;
   log.info(`[shutdown] ${reason} -- pamit + exit dalam ${SHUTDOWN_DELAY_MS}ms`);
-
   try {
-    await sendToTargetChannel(MSG.farewell(botName(), CHANNEL_LANG));
+    await sendToTargetChannel(MSG.farewell(botName()));
   } catch (err) {
     log.warn('[shutdown] gagal ucap pamit:', err.message);
   }
@@ -226,20 +321,18 @@ async function gracefulShutdown(reason = 'shutdown') {
   }, SHUTDOWN_DELAY_MS);
 }
 
-// dengarkan event dari dashboard
 bus.on('upload:bot', () => gracefulRestart('upload bot.js'));
 bus.on('restart',    () => gracefulRestart('tombol restart'));
 bus.on('shutdown',   () => gracefulShutdown('tombol matikan bot'));
 
 // =================================================================
-//  Pemrosesan pertanyaan utama
+//  Pemrosesan pertanyaan
 // =================================================================
 async function processQuestion(question, msg, opts = {}) {
   const { allowReserve = false, isDeferred = false } = opts;
   const cfg = loadCfg();
-  const lang = detectLang(question);
+  const lang = detectLang(question);  // hanya untuk instruksi prompt AI
 
-  // 1) Cek cache
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
   const hit = cache.findSimilar(question, cfg.cache.similarityThreshold);
 
@@ -249,7 +342,6 @@ async function processQuestion(question, msg, opts = {}) {
     return;
   }
 
-  // 2) Bangun konteks
   const { buildSystemPrompt } = loadPersonality();
   const mapCtx = mapData.buildContext(question);
   const sysPrompt = buildSystemPrompt({
@@ -270,11 +362,9 @@ async function processQuestion(question, msg, opts = {}) {
     history.push({ role: 'model', text: r.answer });
   }
 
-  // 3) Generate
   const res = await gemini.generate(question, history, { allowReserve });
   const answer = res.text.trim();
 
-  // 4) Simpan / update cache
   if (hit && followUp) {
     cache.updateAnswer(hit.row.id, answer, `gemini:${res.keyUsed}`);
   } else {
@@ -290,54 +380,40 @@ async function processQuestion(question, msg, opts = {}) {
 }
 
 // =================================================================
-//  Handler rate-limit / spam
-//  - 1x: kasih "sabar ya kak..." + jadwalkan jawaban 60dtk pakai reserve
-//  - 2x: kasih warning bungkam
-//  - 3x: timeout 5 menit + pesan bungkam, deferred jawaban di-cancel
+//  Rate-limit dance
 // =================================================================
 async function handleRateLimited(msg, question) {
   const userId  = msg.author.id;
   const mention = `<@${userId}>`;
-  const lang    = detectLang(question);
   const w = WAITING.get(userId);
 
   if (!w) {
-    // pertama kali -> sabar + scheduler
     const handle = setTimeout(async () => {
-      const cur = WAITING.get(userId);
       WAITING.delete(userId);
       try {
         await processQuestion(question, msg, { allowReserve: true, isDeferred: true });
       } catch (err) {
         log.error('[deferred] gagal:', err.message);
         try {
-          const stillMsg = lang === 'en' ? 'still rate-limited, please try again in a few minutes.'
-            : lang === 'pt' ? 'ainda com limite, tenta de novo daqui a alguns minutos.'
-            : 'masih limit nih, coba beberapa menit lagi yaa.';
           await msg.channel.send({
-            content: `${mention} ${stillMsg}`,
+            content: `${mention} masih limit nih, coba beberapa menit lagi yaa.`,
             allowedMentions: { parse: ['users'] },
           });
         } catch (_) {}
       }
-      void cur;
     }, SABAR_WAIT_MS);
 
-    WAITING.set(userId, { count: 1, ts: Date.now(), handle, question, lang });
-    await msg.reply(MSG.sabar(botName(), lang));
+    WAITING.set(userId, { count: 1, ts: Date.now(), handle, question });
+    await msg.reply(MSG.sabar());
     return;
   }
 
-  // sudah ada entry waiting -> spam
   w.count++;
-  const wlang = w.lang || lang;
-
   if (w.count === 2) {
-    await msg.reply(MSG.warn(botName(), mention, wlang));
+    await msg.reply(MSG.warn(botName(), mention));
     return;
   }
 
-  // count >= 3 -> timeout user 5 menit + cancel deferred
   if (w.handle) clearTimeout(w.handle);
   WAITING.delete(userId);
 
@@ -355,10 +431,7 @@ async function handleRateLimited(msg, question) {
     log.warn('[timeout] gagal Discord-timeout:', err.message);
   }
   TIMEOUTS.set(userId, Date.now() + TIMEOUT_DURATION_MS);
-
-  try {
-    await msg.reply(MSG.timeout(botName(), mention, wlang));
-  } catch (_) {}
+  try { await msg.reply(MSG.timeout(botName(), mention)); } catch (_) {}
 }
 
 // =================================================================
@@ -367,7 +440,7 @@ async function handleRateLimited(msg, question) {
 client.once(Events.ClientReady, async (c) => {
   log.info(`${botName()} online sebagai ${c.user.tag}`);
   READY = true;
-  SLEEPING = true; // mulai tidur dulu, di-flip oleh flow di bawah
+  SLEEPING = true;
 
   if (process.env.YANTO_IS_RESTART === '1') {
     await restartFlow();
@@ -379,7 +452,7 @@ client.once(Events.ClientReady, async (c) => {
 client.on(Events.MessageCreate, async (msg) => {
   try {
     if (msg.author.bot) return;
-    if (!READY || SLEEPING) return; // diam saat tidur / belum siap
+    if (!READY || SLEEPING) return;
 
     const cfg = loadCfg();
     const targetChannel = process.env.YANTO_CHANNEL_ID;
@@ -387,17 +460,14 @@ client.on(Events.MessageCreate, async (msg) => {
 
     const keyword = cfg.keyword || 'yanto';
     if (!containsKeyword(msg.content, keyword)) return;
-
     if (isUserTimedOut(msg.author.id)) return;
 
     const rawQuestion = stripKeyword(msg.content, keyword);
     if (!rawQuestion) {
-      const lang = detectLang(msg.content);
-      await msg.reply(MSG.empty(botName(), lang));
+      await msg.reply(MSG.empty(botName()));
       return;
     }
 
-    // user lagi dalam mode "menunggu" -> rute spam-handler
     if (WAITING.has(msg.author.id)) {
       return handleRateLimited(msg, rawQuestion);
     }
@@ -416,10 +486,7 @@ client.on(Events.MessageCreate, async (msg) => {
         return handleRateLimited(msg, rawQuestion);
       }
       log.error('processQuestion error:', err.message);
-      try {
-        const lang = detectLang(rawQuestion);
-        await msg.reply(MSG.errorApi(lang));
-      } catch (_) {}
+      try { await msg.reply(MSG.errorApi()); } catch (_) {}
     }
   } catch (err) {
     log.error('handler error:', err);
@@ -427,16 +494,42 @@ client.on(Events.MessageCreate, async (msg) => {
 });
 
 // =================================================================
-//  start/stop
+//  Login dengan retry (3x) - permintaan user untuk token salah/error/kosong
 // =================================================================
-function start() {
+async function loginWithRetry(maxAttempts = LOGIN_MAX_ATTEMPTS) {
   const token = process.env.DISCORD_TOKEN;
-  if (!token) throw new Error('DISCORD_TOKEN belum di-set di .env');
-  return client.login(token);
+  if (!token) {
+    log.error('[startup] DISCORD_TOKEN kosong di .env. Bot tidak bisa login.');
+    return false;
+  }
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      log.info(`[startup] Discord login attempt ${i}/${maxAttempts}...`);
+      await client.login(token);
+      log.info(`[startup] Discord login OK pada percobaan ${i}.`);
+      return true;
+    } catch (err) {
+      log.error(`[startup] login attempt ${i}/${maxAttempts} GAGAL: ${err.message}`);
+      const m = String(err && err.message || '').toLowerCase();
+      if (/token|invalid|disallowed|unauthorized|expired/.test(m)) {
+        log.error('[startup] Token Discord salah / error / kosong / expired.');
+      }
+      if (i < maxAttempts) {
+        log.warn(`[startup] retry ${LOGIN_RETRY_MS}ms lagi...`);
+        await new Promise((r) => setTimeout(r, LOGIN_RETRY_MS));
+      }
+    }
+  }
+  log.error(`[startup] Bot mati setelah ${maxAttempts}x percobaan login Discord.`);
+  return false;
 }
-function stop() {
-  return client.destroy();
+
+function start() {
+  return loginWithRetry(LOGIN_MAX_ATTEMPTS).then((ok) => {
+    if (!ok) process.exit(1);
+  });
 }
+function stop() { return client.destroy(); }
 
 module.exports = {
   client,
@@ -444,8 +537,9 @@ module.exports = {
   stop,
   gracefulRestart,
   gracefulShutdown,
-  // helpers untuk dashboard / index
-  state: () => ({ ready: READY, sleeping: SLEEPING, shutting: SHUTTING }),
+  state: () => ({ ready: READY, sleeping: SLEEPING, shutting: SHUTTING, apiOk: API_OK, chanOk: CHAN_OK }),
+  validateNewValues,
+  applyEnvUpdate,
   RESTART_EXIT_CODE,
   SHUTDOWN_EXIT_CODE,
 };

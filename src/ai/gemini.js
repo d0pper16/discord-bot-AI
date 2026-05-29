@@ -27,6 +27,7 @@ const KEYS = () => ({
 const MODEL = () => process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
 const cooldownUntil = { PRIMARY: 0, SECONDARY: 0 };
+let LAST_USED_KEY = null;
 
 const stmtCount = db.prepare(
   `SELECT COUNT(*) AS c FROM api_usage WHERE api_key_id = ? AND used_at >= ?`
@@ -104,6 +105,7 @@ async function generate(prompt, history = [], opts = {}) {
     if (!isAvailable(keyId, allowReserve)) continue;
     try {
       const text = await callOnce(keyId, prompt, history);
+      LAST_USED_KEY = keyId;
       return { text, keyUsed: keyId };
     } catch (err) {
       lastErr = err;
@@ -162,4 +164,4 @@ function status() {
   };
 }
 
-module.exports = { generate, validate, status };
+module.exports = { generate, validate, status, lastUsedKey: () => LAST_USED_KEY };
