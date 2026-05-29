@@ -1,0 +1,26 @@
+[Unit]
+Description=Yanto Discord Bot (AI + Roblox Watcher + Dashboard)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PATH__
+EnvironmentFile=__PATH__/.env
+ExecStart=__NODE__ __PATH__/runner.js
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=append:__PATH__/data/logs/yanto-out.log
+StandardError=append:__PATH__/data/logs/yanto-err.log
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=__PATH__/data
+
+[Install]
+WantedBy=multi-user.target

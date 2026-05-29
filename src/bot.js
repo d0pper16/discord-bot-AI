@@ -73,8 +73,8 @@ const MSG = {
   noMapEmpty: (n) => `maaf yaa, database map ${lower(n)} lagi kosong nih, jadi terlalu banyak map di Roblox yang ${lower(n)} gak tau. Tanya admin map-nya yaa biar diisi datanya dulu.`,
   noMapMiss:  (n) => `maaf, map itu belum ada di catatan ${lower(n)}. ${lower(n)} cuma bantu Roblox umum dan map yang ada di database. Coba tanya admin map yang bersangkutan.`,
   forcedMap2: (n) => `udah ${lower(n)} bilang map itu gak ada di catatan, jangan dipaksa terus yaa. ${lower(n)} bukan google search.`,
-  forcedMap3: (n) => `udah ${lower(n)} bilang berkali-kali GAK ADA. kamu maksa terus, kalo gini ${lower(n)} mending diem aja deh.`,
-  forcedMap4: (n) => `(diem aja, gak nimpalin lagi)`,
+  forcedMap3: (n) => `**WARNING**: kalo kamu masih maksa nanya map yang gak ada, ${lower(n)} bakal **bungkam beneran** loh. Stop ya, gak ada ya gak ada.`,
+  forcedMap4: (n) => `maaf yaa kamu ${lower(n)} bungkam, makanya jangan dipaksa terus. Kalo gak ada di catatan ya emang gak ada, ${lower(n)} cuma jawab dari database bukan ngarang. Cooling down 5 menit yaa.`,
 };
 
 // =================================================================
@@ -568,8 +568,35 @@ async function processQuestion(question, msg, opts = {}) {
     let resp;
     if (cnt === 1)      resp = dbEmpty ? MSG.noMapEmpty(botName()) : MSG.noMapMiss(botName());
     else if (cnt === 2) resp = MSG.forcedMap2(botName());
-    else if (cnt === 3) resp = MSG.forcedMap3(botName());
-    else                resp = null; // silent treatment
+    else if (cnt === 3) resp = MSG.forcedMap3(botName()); // ANCAMAN bungkam
+    else if (cnt === 4) {
+      // EKSEKUSI bungkam: Discord timeout 5 menit + pesan "maaf ya kamu bungkam"
+      try {
+        let member = msg.member;
+        if (!member && msg.guild) {
+          member = await msg.guild.members.fetch(msg.author.id).catch(() => null);
+        }
+        if (member && member.moderatable) {
+          await member.timeout(TIMEOUT_DURATION_MS, `Forced map dance escalation by ${botName()}`);
+          log.info(`[forced-map] TIMEOUT user=${msg.author.id} (${TIMEOUT_DURATION_MS / 60000}min)`);
+        } else {
+          log.warn('[forced-map] member tidak moderatable, fallback timeout internal');
+        }
+      } catch (err) {
+        log.warn('[forced-map] gagal Discord-timeout:', err.message);
+      }
+      TIMEOUTS.set(msg.author.id, Date.now() + TIMEOUT_DURATION_MS);
+      FORCED_MAP.delete(msg.author.id); // reset counter (user sudah di-bungkam)
+      resp = MSG.forcedMap4(botName());
+      audit.log(
+        `discord:${msg.author.id}`,
+        'forcedMap.timeout',
+        `channel:${msg.channelId}`,
+        `5min timeout, question: ${question.slice(0, 200)}`
+      );
+    } else {
+      resp = null; // count > 4: silent (tapi user juga sudah di-timeout di Discord)
+    }
     if (resp) {
       await reply(msg, resp);
       chatLog.add({
@@ -582,8 +609,7 @@ async function processQuestion(question, msg, opts = {}) {
         answeredAt: Math.floor(Date.now() / 1000),
       });
     } else {
-      // count >= 4: silent (tidak respon, tidak log)
-      log.info(`[forced-map] user=${msg.author.id} silent (count>=4)`);
+      log.info(`[forced-map] user=${msg.author.id} silent (count>${cnt})`);
     }
     return;
   }

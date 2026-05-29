@@ -445,3 +445,91 @@ Saat user nanya map yg ga ada di DB:
 4. **4×+**: silent treatment (tidak respon sama sekali untuk pertanyaan ini)
 
 Counter reset setelah 30 menit idle atau saat user tanya map yang ada di DB.
+
+
+
+## VPS Deploy (Auto-setup)
+
+Project ini dilengkapi script setup VPS supaya proses deploy minim manual:
+
+### Quick Start
+
+```bash
+# 1. Clone & setup .env
+git clone https://github.com/d0pper16/discord-bot-AI.git
+cd discord-bot-AI
+cp .env.example .env
+nano .env                       # isi DISCORD_TOKEN, GEMINI_API_KEY_1, dll.
+
+# 2. Install deps
+npm install
+
+# 3. Auto-setup VPS (jalankan SEKALI)
+sudo bash scripts/install-vps.sh
+
+# 4. Pilih: PM2 (rekomendasi)
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup    # follow instruksi yang muncul
+```
+
+### Yang Otomatis vs Manual
+
+| Item | Auto? | Catatan |
+|------|-------|---------|
+| **PM2 ecosystem** | ✅ FULL AUTO | `pm2 start ecosystem.config.js` -- file sudah di repo |
+| **PM2 install** | ✅ Auto via script | `sudo bash scripts/install-vps.sh` install PM2 globally |
+| **PM2 log rotate** | ✅ Auto via script | pm2-logrotate (10MB × 14 file, gzip, harian) |
+| **Auto-restart on crash** | ✅ Built-in PM2 | max 15 restart, min uptime 30s, max RAM 512MB |
+| **UFW firewall (a)** | ⚠ Semi-auto | otomatis kalau script jalankan dengan `sudo` |
+| **systemd service (c)** | ⚠ Template only | script generate file, copy manual ke `/etc/systemd/system/` |
+| **nginx reverse proxy (b)** | ⚠ Template only | script generate file, edit domain + copy manual |
+| **SSL/HTTPS (certbot)** | ❌ Manual | `sudo certbot --nginx -d domain.com` |
+
+### File yang Di-generate
+
+```
+ecosystem.config.js               (sudah di repo, PM2 auto-detect)
+scripts/install-vps.sh            (one-time setup)
+scripts/yanto.service.template    (systemd template)
+scripts/nginx-yanto.conf.template (nginx template)
+
+Setelah jalankan install-vps.sh:
+scripts/yanto.service             (generated, USER/PATH/NODE auto-fill)
+scripts/nginx-yanto.conf          (generated, port auto-fill dari .env)
+```
+
+### Pilih PM2 atau systemd?
+
+**PM2** lebih cocok kalau:
+- Mau cepat (1 command jalan)
+- Mau log rotate built-in
+- Mau monitor via `pm2 status` / `pm2 logs`
+
+**systemd** lebih cocok kalau:
+- Server pakai banyak service systemd (uniformity)
+- Mau auto-start lebih reliable lewat journald
+- Mau hardening lebih ketat (PrivateTmp, ProtectSystem, dst.)
+
+Dua-duanya valid. PM2 lebih simple untuk hobby/single-app deploy. systemd lebih native untuk production multi-service.
+
+### Update Bot di VPS
+
+```bash
+cd discord-bot-AI
+git pull origin main         # atau feat/yanto-bot
+npm install                   # kalau dependency berubah
+pm2 reload yanto             # zero-downtime reload (atau pm2 restart yanto)
+```
+
+### Lihat Logs
+
+```bash
+pm2 logs yanto              # live tail
+pm2 logs yanto --lines 500  # last 500 lines
+pm2 monit                    # interactive monitor
+
+# atau langsung baca file (kalau pakai PM2):
+tail -f data/logs/yanto-out.log
+tail -f data/logs/yanto-err.log
+```

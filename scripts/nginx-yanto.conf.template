@@ -1,0 +1,34 @@
+## Yanto dashboard reverse proxy.
+## Edit "server_name" sesuai domain kamu, lalu:
+##   sudo cp scripts/nginx-yanto.conf /etc/nginx/sites-available/yanto
+##   sudo ln -sf /etc/nginx/sites-available/yanto /etc/nginx/sites-enabled/
+##   sudo nginx -t && sudo systemctl reload nginx
+##
+## Untuk SSL (HTTPS) gratis:
+##   sudo certbot --nginx -d dashboard.yourdomain.com
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name dashboard.example.com;   # <-- GANTI ke domain kamu
+
+    # Limit body untuk upload file (file manager dashboard)
+    client_max_body_size 10M;
+
+    # Akses log terpisah
+    access_log /var/log/nginx/yanto-access.log;
+    error_log  /var/log/nginx/yanto-error.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_read_timeout 90;
+        proxy_buffering off;               # supaya logs streaming langsung
+    }
+}
