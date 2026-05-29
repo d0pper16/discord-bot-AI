@@ -33,7 +33,6 @@
   <button data-tab="personality">Gaya Bicara</button>
   <button data-tab="config">Config Bot</button>
   <button data-tab="files">File Manager</button>
-  <button data-tab="upload">Upload Script</button>
   <button data-tab="history">Riwayat Chat</button>
   <button data-tab="audit">Audit Log</button>
   <button data-tab="logs">Server Logs</button>
@@ -306,20 +305,23 @@
 <section id="tab-files" class="tab">
   <h2>File Manager</h2>
   <p class="hint">
-    Edit, tambah, hapus file project. Penulisan atomic. File "protected" tidak bisa dihapus.
-    Save src/bot.js auto-restart bot.
+    Edit, tambah, hapus, atau replace file project. Penulisan atomic.
+    File <b>protected</b> (core) tidak bisa dihapus. Replace file protected
+    otomatis trigger restart bot setelah upload sukses (~3 detik).
+    <br><b>Replace</b>: tombol per file. Nama file uploaded WAJIB sama dengan target.
+    <br><b>Upload File</b>: untuk file BARU saja. Nama mirip akan kena typo guard.
   </p>
   <div class="row writer" style="margin-bottom:12px">
     <button id="files-refresh" class="secondary">Refresh</button>
     <button id="files-new">+ File Baru</button>
-    <button id="files-upload-btn">Upload File</button>
+    <button id="files-upload-btn">Upload File Baru</button>
     <input id="files-upload-input" type="file" hidden>
-    <input id="files-upload-dir"   type="text" placeholder="dir target (kosongin = root)" style="max-width:240px">
+    <input id="files-upload-dir"   type="text" placeholder="dir target file baru (kosongin = root)" style="max-width:280px">
   </div>
   <div class="files-grid">
     <div class="files-list">
       <table id="files-table">
-        <thead><tr><th>Path</th><th>Ukuran</th><th></th></tr></thead>
+        <thead><tr><th>Path</th><th>Ukuran</th><th>Aksi</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -336,29 +338,9 @@
       </div>
     </div>
   </div>
-</section>
 
-<!-- ====== UPLOAD QUICK ====== -->
-<section id="tab-upload" class="tab">
-  <h2>Upload Script (cepat)</h2>
-  <p class="hint">
-    Untuk replace cepat 3 file utama. Upload bot.js auto-restart bot ~3 detik (silent, tanpa pesan pamit).
-  </p>
-  <form id="upload-form" class="card writer">
-    <label>Target file
-      <select name="target" required class="writer-input">
-        <option value="personality">src/ai/personality.js</option>
-        <option value="config">config.json</option>
-        <option value="bot">src/bot.js (auto-restart silent)</option>
-      </select>
-    </label>
-    <label>File baru
-      <input type="file" name="file" required class="writer-input">
-      <small>Nama file harus persis: personality.js / config.json / bot.js.</small>
-    </label>
-    <button type="submit">Upload</button>
-  </form>
-  <pre id="upload-result"></pre>
+  <!-- Hidden input untuk per-row replace -->
+  <input id="files-replace-input" type="file" hidden>
 </section>
 
 <!-- ====== HISTORY ====== -->
@@ -515,26 +497,58 @@
 <!-- ====== BACKUP DB ====== -->
 <section id="tab-db" class="tab">
   <h2>Backup &amp; Restore Database</h2>
+  <p class="hint">
+    Setiap tabel diunduh dengan format BERBEDA biar mudah dibedakan saat
+    backup banyak file:
+    <br>&middot; <b>map_data</b>      &rarr; <code>.json</code> (text-friendly, mudah di-edit manual)
+    <br>&middot; <b>chat_history</b>  &rarr; <code>.csv</code> (excel/spreadsheet-friendly)
+    <br>&middot; <b>raw bot.db</b>    &rarr; <code>.db</code> (full SQLite binary, paling aman untuk full restore)
+  </p>
+
   <div class="card">
-    <h3>Export</h3>
-    <p class="hint">Backup map_data + chat_history -> JSON.</p>
-    <button id="db-export">Download backup .json</button>
+    <h3>Export per Tabel</h3>
+    <p class="hint">Setiap tombol download 1 file dengan format khusus untuk tabel tsb.</p>
+    <div class="row">
+      <button id="db-export-maps">Backup map_data (.json)</button>
+      <button id="db-export-history">Backup chat_history (.csv)</button>
+      <button id="db-export-raw" class="secondary">Backup raw bot.db (.db)</button>
+    </div>
   </div>
+
   <div class="card writer">
-    <h3>Import</h3>
-    <form id="db-import-form">
-      <label>File backup<input type="file" name="file" accept=".json" required class="writer-input"></label>
+    <h3>Import map_data</h3>
+    <p class="hint">Upload file <code>.json</code> backup map_data.</p>
+    <form id="db-import-maps-form">
+      <label>File backup map_data
+        <input type="file" name="file" accept=".json,application/json" required class="writer-input">
+      </label>
       <label>Mode
         <select name="mode" class="writer-input">
-          <option value="merge">merge</option>
-          <option value="replace">replace</option>
+          <option value="merge">merge (tambah ke yang ada)</option>
+          <option value="replace">replace (kosongkan tabel dulu)</option>
         </select>
       </label>
-      <label class="row" style="align-items:center;gap:6px"><input type="checkbox" name="includeMaps" checked style="width:auto"> Sertakan map_data</label>
-      <label class="row" style="align-items:center;gap:6px"><input type="checkbox" name="includeHistory" checked style="width:auto"> Sertakan chat_history</label>
-      <button type="submit" class="danger">Import</button>
+      <button type="submit" class="danger">Import map_data</button>
     </form>
-    <pre id="db-import-result"></pre>
+    <pre id="db-import-maps-result"></pre>
+  </div>
+
+  <div class="card writer">
+    <h3>Import chat_history</h3>
+    <p class="hint">Upload file <code>.csv</code> backup chat_history (atau <code>.json</code> legacy).</p>
+    <form id="db-import-history-form">
+      <label>File backup chat_history
+        <input type="file" name="file" accept=".csv,.json,text/csv,application/json" required class="writer-input">
+      </label>
+      <label>Mode
+        <select name="mode" class="writer-input">
+          <option value="merge">merge (tambah ke yang ada)</option>
+          <option value="replace">replace (kosongkan tabel dulu)</option>
+        </select>
+      </label>
+      <button type="submit" class="danger">Import chat_history</button>
+    </form>
+    <pre id="db-import-history-result"></pre>
   </div>
 </section>
 

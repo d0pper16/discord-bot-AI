@@ -801,20 +801,71 @@ loadConfigFields();
 //  FILE MANAGER
 // =================================================================
 let CURRENT_FILE = null;
+let REPLACE_TARGET_PATH = null; // path untuk per-row Replace flow
+
 async function loadFiles() {
   const data = await fetch('/api/files').then(r => r.json());
   const tbody = $('#files-table tbody'); tbody.innerHTML = '';
   data.files.forEach(f => {
     const tr = document.createElement('tr');
+    const protBadge = f.protected ? ' <span class="tag-protected" title="restart auto saat replace">protected</span>' : '';
     tr.innerHTML = `
-      <td><code>${esc(f.path)}</code>${f.protected ? ' <span class="tag-protected">protected</span>' : ''}</td>
+      <td><code>${esc(f.path)}</code>${protBadge}</td>
       <td><small>${(f.size/1024).toFixed(2)} KB</small></td>
-      <td class="act"><button class="secondary" data-open="${esc(f.path)}">Open</button></td>`;
+      <td class="act">
+        <button class="secondary" data-open="${esc(f.path)}">Open</button>
+        <button class="writer" data-replace="${esc(f.path)}" ${ROLE!=='dev'?'disabled':''} title="Upload file pengganti (nama harus sama)">Replace</button>
+      </td>`;
     tr.querySelector('[data-open]').onclick = () => openFileEditor(f.path);
+    const repBtn = tr.querySelector('[data-replace]');
+    if (repBtn) repBtn.onclick = () => {
+      REPLACE_TARGET_PATH = f.path;
+      $('#files-replace-input').click();
+    };
     tbody.appendChild(tr);
   });
 }
 $('#files-refresh').onclick = loadFiles;
+
+// Per-file Replace flow (button per row -> hidden input file -> POST /api/files/replace)
+$('#files-replace-input').onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !REPLACE_TARGET_PATH) { REPLACE_TARGET_PATH = null; return; }
+  const target = REPLACE_TARGET_PATH;
+  REPLACE_TARGET_PATH = null;
+
+  const expectedName = target.split('/').pop();
+  if (file.name.toLowerCase() !== expectedName.toLowerCase()) {
+    alert(`Nama file tidak cocok.\nTarget : ${expectedName}\nUpload : ${file.name}\n\nUntuk REPLACE, nama file harus persis sama. Rename file kamu lalu coba lagi.`);
+    return;
+  }
+
+  const creds = await askConfirm(`Yakin REPLACE ${target} dengan "${file.name}" (${(file.size/1024).toFixed(2)} KB)?`);
+  if (!creds) return;
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('target_path', target);
+  fd.append('_confirm_user', creds.user);
+  fd.append('_confirm_pass', creds.pass);
+
+  const r = await fetch('/api/files/replace', { method: 'POST', body: fd });
+  if (!r.ok) {
+    let msg = 'Gagal replace: ' + r.status;
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {}
+    alert(msg);
+    return;
+  }
+  const d = await r.json();
+  alert(d.message || `${d.path} berhasil di-replace.`);
+  if (d.restarting) {
+    showBusy('Bot restart (file protected)...', 'Bot otomatis restart setelah replace file core. Tunggu ~10 detik.');
+    pollForReady();
+  }
+  loadFiles();
+};
+
 async function openFileEditor(rel) {
   const data = await fetch('/api/files/read?path=' + encodeURIComponent(rel)).then(r => r.json());
   if (data.error) { alert(data.error); return; }
@@ -831,7 +882,7 @@ $('#fe-save').onclick = async () => {
   if (!CURRENT_FILE) return;
   const ok = await jsonWrite('PUT', '/api/files/save',
     { path: CURRENT_FILE.path, content: $('#fe-content').value },
-    `Yakin simpan ${CURRENT_FILE.path}?${CURRENT_FILE.path === 'src/bot.js' ? ' (akan auto-restart bot)' : ''}`);
+    `Yakin simpan ${CURRENT_FILE.path}?${CURRENT_FILE.protected ? ' (file protected, akan auto-restart bot)' : ''}`);
   if (ok) {
     const d = await ok.json();
     alert(`Tersimpan: ${d.path}${d.restarting ? ' - bot auto-restart.' : ''}`);
@@ -864,6 +915,8 @@ $('#nf-create').onclick = async () => {
     loadFiles(); openFileEditor(d.path);
   }
 };
+
+// Upload File BARU (typo guard tetap aktif, untuk file yang belum ada)
 $('#files-upload-btn').onclick = () => $('#files-upload-input').click();
 $('#files-upload-input').onchange = async (e) => {
   const file = e.target.files[0]; if (!file) return;
@@ -871,6 +924,7 @@ $('#files-upload-input').onchange = async (e) => {
   e.target.value = '';
   await runUpload(file, dir, 'auto', null);
 };
+
 async function runUpload(file, dir, mode, targetPath) {
   const creds = await askConfirm(`Yakin upload "${file.name}" (${(file.size/1024).toFixed(2)} KB) ke ${dir || 'root'}?`);
   if (!creds) return;
@@ -890,11 +944,13 @@ async function runUpload(file, dir, mode, targetPath) {
     const data = await r.json();
     let options = [];
     if (data.status === 'exists') {
-      options = [{ label: `Update file existing (${data.targetPath})`, value: { mode: 'update', target_path: data.targetPath }, cls: 'danger' }];
+      // File sudah ada -> arahkan ke tombol Replace per file (bukan auto update)
+      alert(`File ${data.targetPath} sudah ada.\n\nGunakan tombol REPLACE pada file tsb di tabel.\n(Upload File hanya untuk menambah file BARU.)`);
+      return;
     } else if (data.status === 'ambiguous') {
       options = [
         ...data.suggestions.map(s => ({
-          label: `Update existing ${s.path} (Lev=${s.distance})`,
+          label: `Replace existing ${s.path} (typo? Lev=${s.distance})`,
           value: { mode: 'update', target_path: s.path }, cls: 'secondary',
         })),
         { label: `Tambah file baru: ${data.targetPath}`, value: { mode: 'create', target_path: data.targetPath } },
@@ -911,25 +967,7 @@ async function runUpload(file, dir, mode, targetPath) {
   alert(msg);
 }
 
-// =================================================================
-//  Quick Upload
-// =================================================================
-$('#upload-form').onsubmit = async (e) => {
-  e.preventDefault();
-  if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
-  const target = e.target.target.value;
-  const file   = e.target.file.files[0];
-  if (!file) return;
-  const targetPathMap = { personality: 'src/ai/personality.js', config: 'config.json', bot: 'src/bot.js' };
-  const expected = targetPathMap[target].split('/').pop().toLowerCase();
-  if ((file.name || '').toLowerCase() !== expected) {
-    alert(`Nama file harus persis "${expected}".`);
-    return;
-  }
-  await runUpload(file, target === 'config' ? '' : (target === 'personality' ? 'src/ai' : 'src'), 'update', targetPathMap[target]);
-  e.target.reset();
-  loadPersonality(); loadConfigFields();
-};
+// (Quick Upload tab dihapus per req. user -- Replace per file lewat tombol di File Manager)
 
 // =================================================================
 //  AUDIT
@@ -960,43 +998,84 @@ $('#audit-search').addEventListener('input', (e) => {
 $('#audit-refresh').onclick = () => loadAudit($('#audit-search').value);
 
 // =================================================================
-//  DB Backup
+//  DB Backup -- per tabel terpisah, format BERBEDA per tabel
+//    map_data    -> .json
+//    chat_history-> .csv
+//    raw bot.db  -> .db (binary SQLite)
 // =================================================================
-$('#db-export').onclick = async () => {
+function downloadFromUrl(url, filename) {
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function downloadResp(endpoint, defaultName) {
   try {
-    const r = await fetch('/api/db/export'); if (!r.ok) { alert('export gagal: ' + r.status); return; }
+    const r = await fetch(endpoint);
+    if (!r.ok) { alert(`Download gagal: ${r.status}`); return; }
+    // Extract filename dari Content-Disposition kalau ada
+    let filename = defaultName;
+    const cd = r.headers.get('Content-Disposition');
+    if (cd) {
+      const m = cd.match(/filename="([^"]+)"/);
+      if (m) filename = m[1];
+    }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `yanto-db-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  } catch (e) { alert('export error: ' + e.message); }
-};
-$('#db-import-form').onsubmit = async (e) => {
+    downloadFromUrl(url, filename);
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) { alert('Download error: ' + e.message); }
+}
+
+$('#db-export-maps').onclick    = () => downloadResp('/api/db/backup/maps',    'map_data.json');
+$('#db-export-history').onclick = () => downloadResp('/api/db/backup/history', 'chat_history.csv');
+$('#db-export-raw').onclick     = () => downloadResp('/api/db/backup/raw',     'bot.db');
+
+// Import map_data (JSON)
+$('#db-import-maps-form').onsubmit = async (e) => {
   e.preventDefault();
   if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
   const f = e.target;
   const file = f.file.files[0]; if (!file) return;
   const mode = f.mode.value;
-  const includeMaps    = f.includeMaps.checked;
-  const includeHistory = f.includeHistory.checked;
-  if (!includeMaps && !includeHistory) { alert('Pilih minimal 1 tabel.'); return; }
   if (mode === 'replace') {
-    const yes = await askYesNo('Mode REPLACE akan menghapus data existing. Lanjutkan?', 'Replace DB');
+    const yes = await askYesNo('Mode REPLACE akan menghapus SEMUA map_data existing. Lanjutkan?', 'Replace map_data');
     if (!yes) return;
   }
   let content;
   try { content = await file.text(); } catch (err) { alert(err.message); return; }
   try { JSON.parse(content); } catch (err) { alert('JSON invalid: ' + err.message); return; }
-  const ok = await jsonWrite('POST', '/api/db/import',
-    { content, mode, includeMaps, includeHistory },
-    `Yakin import? Mode=${mode}.`);
+  const ok = await jsonWrite('POST', '/api/db/import/maps',
+    { content, mode },
+    `Yakin import map_data? Mode=${mode}.`);
   if (ok) {
     const d = await ok.json();
-    $('#db-import-result').textContent = JSON.stringify(d, null, 2);
-    alert(`Import sukses. +${d.mapInserted} maps, +${d.histInserted} history.`);
-    loadMaps(); loadHistory();
+    $('#db-import-maps-result').textContent = JSON.stringify(d, null, 2);
+    alert(`Import map_data sukses. +${d.inserted} rows${d.cleared ? `, replaced ${d.cleared}` : ''}.`);
+    loadMaps();
+  }
+};
+
+// Import chat_history (CSV atau JSON)
+$('#db-import-history-form').onsubmit = async (e) => {
+  e.preventDefault();
+  if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
+  const f = e.target;
+  const file = f.file.files[0]; if (!file) return;
+  const mode = f.mode.value;
+  if (mode === 'replace') {
+    const yes = await askYesNo('Mode REPLACE akan menghapus SEMUA chat_history existing. Lanjutkan?', 'Replace chat_history');
+    if (!yes) return;
+  }
+  let content;
+  try { content = await file.text(); } catch (err) { alert(err.message); return; }
+  const ok = await jsonWrite('POST', '/api/db/import/history',
+    { content, mode },
+    `Yakin import chat_history? Mode=${mode}.`);
+  if (ok) {
+    const d = await ok.json();
+    $('#db-import-history-result').textContent = JSON.stringify(d, null, 2);
+    alert(`Import chat_history sukses. +${d.inserted} rows${d.cleared ? `, replaced ${d.cleared}` : ''}.`);
+    loadHistory();
   }
 };
 

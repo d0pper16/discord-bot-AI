@@ -33,8 +33,7 @@ const LOGIN_RETRY_MS      = 5000;
 const CACHE_TTL_DAYS      = 30;
 const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1x per hari
 const FORCED_MAP_TTL_MS   = 30 * 60 * 1000; // reset counter setelah 30 menit idle
-const PRESENCE_INTERVAL_MS = 60 * 1000; // refresh activity status tiap 1 menit
-const PRESENCE_ROTATE_MS   = 12 * 1000; // rotasi info tiap 12 detik (5 frame/menit)
+const PRESENCE_INTERVAL_MS = 60 * 1000; // refresh activity status tiap 1 menit (sumber dari watcher.bus)
 
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
@@ -844,39 +843,51 @@ function stop() { return client.destroy(); }
 
 // =================================================================
 //  Discord Activity / Rich Presence
-//  Tampil di profile bot Discord:
-//    "Watching Map Name | 142 players online"
-//    "Playing Map Name | 5.2 jt visits"
-//    dst (rotasi tiap 12 detik)
+//
+//  Format (sesuai req. user):
+//    Watching <Map Name> | 1.4K Active | 2.1M Visit | 510 fav
+//
+//  Trigger:
+//    - emit 'update' dari Roblox watcher (1 menit sekali, source-of-truth)
+//    - sleep mode: status DnD + "{Nama} lagi tidur"
+//    - watcher OFF: status default "Sebut <keyword>"
 // =================================================================
-function fmtCompactID(n) {
+
+/**
+ * Format compact KMB style (req. user).
+ *   142    -> "142"
+ *   1234   -> "1.2K"
+ *   1.4M   -> "1.4M"
+ *   2.1B   -> "2.1B"
+ */
+function fmtKMB(n) {
   if (typeof n !== 'number' || isNaN(n)) return '...';
   if (n < 1000) return String(n);
   const u = [
-    { v: 1e12, s: 't' },
-    { v: 1e9,  s: 'm' },
-    { v: 1e6,  s: 'jt' },
-    { v: 1e3,  s: 'rb' },
+    { v: 1e12, s: 'T' },
+    { v: 1e9,  s: 'B' },
+    { v: 1e6,  s: 'M' },
+    { v: 1e3,  s: 'K' },
   ];
   for (const x of u) {
     if (n >= x.v) {
       const v = n / x.v;
+      // >=100 -> integer, lainnya 1 desimal (drop .0 trailing)
       const str = v >= 100 ? Math.floor(v).toString() : v.toFixed(1).replace(/\.0$/, '');
-      return str + ' ' + x.s;
+      return str + x.s;
     }
   }
   return String(n);
 }
 
 let presenceTimer = null;
-let presenceFrame = 0;
 let presenceLoopBound = false;
 
 async function updatePresence() {
   try {
     if (!client.user) return;
 
-    // Kalau bot tidur (validasi gagal) -> set status DnD + activity diam
+    // Bot tidur (validasi gagal) -> DnD + diam
     if (SLEEPING) {
       await client.user.setPresence({
         status: 'dnd',
@@ -891,7 +902,7 @@ async function updatePresence() {
 
     const wstate = robloxWatcher.getStatus();
 
-    // Kalau watcher belum aktif (universe ID kosong) -> default activity
+    // Watcher OFF (universe ID belum di-set) -> hint default
     if (!wstate || !wstate.enabled) {
       await client.user.setPresence({
         status: 'online',
@@ -904,7 +915,7 @@ async function updatePresence() {
       return;
     }
 
-    // Watcher ON tapi belum ada data (initial fetch) -> "loading..."
+    // Watcher ON tapi data belum siap (initial fetch < 5 detik)
     if (wstate.playing == null && wstate.visits == null) {
       await client.user.setPresence({
         status: 'idle',
@@ -916,51 +927,19 @@ async function updatePresence() {
       return;
     }
 
-    // Watcher aktif + ada data -> rotate info tiap PRESENCE_ROTATE_MS
+    // SINGLE FRAME: "Watching <map> | 1.4K Active | 2.1M Visit | 510 fav"
     const mapName = wstate.name || 'Roblox';
-    const playing = wstate.playing != null ? fmtCompactID(wstate.playing) : '...';
-    const visits  = wstate.visits  != null ? fmtCompactID(wstate.visits)  : '...';
-    const fav     = wstate.favorited != null ? fmtCompactID(wstate.favorited) : '...';
-
-    // 5 frame rotasi info
-    const frames = [
-      // 1) Watching: nama map (utama)
-      {
-        type: ActivityType.Watching,
-        name: mapName,
-        state: `${playing} player online`,
-      },
-      // 2) Playing: total visits
-      {
-        type: ActivityType.Playing,
-        name: `${mapName}`,
-        state: `${visits} total visits`,
-      },
-      // 3) Watching: favorited count
-      {
-        type: ActivityType.Watching,
-        name: mapName,
-        state: `${fav} favorited`,
-      },
-      // 4) Custom: ringkasan ala "Quick Status"
-      {
-        type: ActivityType.Custom,
-        name: 'custom',
-        state: `${playing} online | ${visits} visits`,
-      },
-      // 5) Listening: hint sebut keyword
-      {
-        type: ActivityType.Listening,
-        name: `sebut "${botKeyword()}" buat tanya`,
-      },
-    ];
-
-    const frame = frames[presenceFrame % frames.length];
-    presenceFrame++;
+    const active  = wstate.playing != null ? fmtKMB(wstate.playing)   : '...';
+    const visits  = wstate.visits  != null ? fmtKMB(wstate.visits)    : '...';
+    const fav     = wstate.favorited != null ? fmtKMB(wstate.favorited) : '...';
 
     await client.user.setPresence({
       status: 'online',
-      activities: [frame],
+      activities: [{
+        type: ActivityType.Watching,
+        name: mapName,
+        state: `${active} Active | ${visits} Visit | ${fav} fav`,
+      }],
     });
   } catch (err) {
     log.warn('[presence] update error:', err.message);
@@ -968,18 +947,27 @@ async function updatePresence() {
 }
 
 function startPresenceLoop() {
-  if (presenceTimer) return;
-  // Initial set
+  // Initial set + bind ke event watcher (1 menit sekali sumber data sama).
+  // TIDAK ada interval terpisah -- presence di-update tiap watcher.bus 'update'.
   updatePresence().catch(() => {});
-  // Rotate frame tiap 12 detik
-  presenceTimer = setInterval(() => updatePresence().catch(() => {}), PRESENCE_ROTATE_MS);
-  if (presenceTimer.unref) presenceTimer.unref();
-  // Refresh instant kalau Roblox watcher dapat data baru (bukan tunggu 12 dtk)
+
   if (!presenceLoopBound) {
     robloxWatcher.bus.on('update', () => {
       updatePresence().catch(() => {});
     });
     presenceLoopBound = true;
+  }
+
+  // Backup interval: refresh tiap 1 menit kalau watcher OFF (biar status
+  // sleep/idle/default tetap "fresh" -- ini lightweight, no API call).
+  if (!presenceTimer) {
+    presenceTimer = setInterval(() => {
+      const wstate = robloxWatcher.getStatus();
+      if (!wstate.enabled || SLEEPING) {
+        updatePresence().catch(() => {});
+      }
+    }, 60 * 1000);
+    if (presenceTimer.unref) presenceTimer.unref();
   }
 }
 

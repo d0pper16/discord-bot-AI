@@ -314,6 +314,31 @@ function atomicWriteFile(absPath, buf) {
   fs.renameSync(tmp, absPath);
 }
 
+/**
+ * Parse 1 baris CSV (RFC 4180 minimal: support quoted "..." dan escape "").
+ * Tidak handle multi-line cell karena chat_history.answer biasanya ada \n yg
+ * di-encode \" di backup -- cukup untuk roundtrip backup/restore kita.
+ */
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+      if (ch === '"') { inQuote = false; continue; }
+      cur += ch;
+    } else {
+      if (ch === ',') { out.push(cur); cur = ''; continue; }
+      if (ch === '"' && cur === '') { inQuote = true; continue; }
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
 // =================================================================
 //  start()
 // =================================================================
@@ -561,20 +586,65 @@ function start() {
     }
   });
 
-  // ----------- DB Export (dev & admin boleh download backup) -----------
-  app.get('/api/db/export', (req, res) => {
-    const data = {
+  // =================================================================
+  //  DB Backup -- dua-tabel-terpisah (req. user: format berbeda per tabel)
+  //
+  //  Endpoint:
+  //    GET /api/db/backup/maps     -> map_data sebagai .json (text-friendly)
+  //    GET /api/db/backup/history  -> chat_history sebagai .csv (excel-friendly)
+  //    GET /api/db/backup/raw      -> bot.db utuh (.db SQLite binary)
+  //
+  //  Format SENGAJA berbeda supaya mudah dibedakan saat backup banyak file.
+  // =================================================================
+  app.get('/api/db/backup/maps', (req, res) => {
+    const rows = db.prepare('SELECT * FROM map_data ORDER BY id').all();
+    const payload = {
+      table: 'map_data',
       exportedAt: new Date().toISOString(),
       version: 1,
-      map_data: db.prepare('SELECT * FROM map_data ORDER BY id').all(),
-      chat_history: db.prepare('SELECT * FROM chat_history ORDER BY id').all(),
+      count: rows.length,
+      rows,
     };
-    audit.log(req.auth.user, 'db.export', 'database',
-      JSON.stringify({ maps: data.map_data.length, history: data.chat_history.length }));
-    res.setHeader('Content-Disposition',
-      `attachment; filename="yanto-db-${Date.now()}.json"`);
+    audit.log(req.auth.user, 'db.backup.maps', 'map_data', `${rows.length} rows`);
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Disposition', `attachment; filename="yanto-map_data-${ts}.json"`);
     res.setHeader('Content-Type', 'application/json');
-    res.send(JSON.stringify(data, null, 2));
+    res.send(JSON.stringify(payload, null, 2));
+  });
+
+  app.get('/api/db/backup/history', (req, res) => {
+    const rows = db.prepare('SELECT id, channel_id, user_id, question, answer, source, created_at, updated_at FROM chat_history ORDER BY id').all();
+    audit.log(req.auth.user, 'db.backup.history', 'chat_history', `${rows.length} rows`);
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Disposition', `attachment; filename="yanto-chat_history-${ts}.csv"`);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    // CSV header
+    const header = ['id', 'channel_id', 'user_id', 'question', 'answer', 'source', 'created_at', 'updated_at'];
+    const escape = (v) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    };
+    let out = header.join(',') + '\n';
+    for (const r of rows) {
+      out += header.map((k) => escape(r[k])).join(',') + '\n';
+    }
+    res.send(out);
+  });
+
+  // Raw .db dump (binary SQLite file)
+  app.get('/api/db/backup/raw', (req, res) => {
+    const dbPath = path.join(ROOT, 'data', 'bot.db');
+    if (!fs.existsSync(dbPath)) {
+      return res.status(404).json({ error: 'bot.db tidak ditemukan' });
+    }
+    audit.log(req.auth.user, 'db.backup.raw', 'bot.db',
+      `${fs.statSync(dbPath).size} bytes`);
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Disposition', `attachment; filename="yanto-bot-${ts}.db"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.sendFile(dbPath);
   });
 
   // ----------- File manager: list & read -----------
@@ -810,7 +880,96 @@ function start() {
     }
   });
 
-  // ----------- File Manager: upload (dengan typo guard) -----------
+  // =================================================================
+  //  File Manager: REPLACE (tombol per-file)
+  //
+  //  Sesuai req. user:
+  //    - 1 button per file untuk replace
+  //    - validasi nama file uploaded WAJIB SAMA persis dengan target
+  //    - kalau target adalah PROTECTED file (core), auto-restart bot
+  //      otomatis setelah upload sukses
+  //
+  //  Endpoint: POST /api/files/replace  body multipart:
+  //    - file       : file baru
+  //    - target_path: relative path target (mis. "src/bot.js")
+  //    - _confirm_user, _confirm_pass: dev creds
+  // =================================================================
+  app.post('/api/files/replace',
+    requireDev,
+    upload.single('file'),
+    requireConfirm,
+    (req, res) => {
+      const cleanup = () => { if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {} };
+      try {
+        if (!req.file) { cleanup(); return res.status(400).json({ error: 'file kosong' }); }
+
+        const tgtPath = String(req.body.target_path || '').trim();
+        if (!tgtPath) { cleanup(); return res.status(400).json({ error: 'target_path wajib' }); }
+
+        const sf = safeRel(tgtPath);
+        if (!fs.existsSync(sf.abs)) {
+          cleanup();
+          return res.status(404).json({ error: `File target ${sf.rel} tidak ada (gunakan upload baru)` });
+        }
+        if (!TEXT_EXT.test(sf.rel)) {
+          cleanup();
+          return res.status(400).json({ error: 'ekstensi tidak didukung' });
+        }
+
+        // Validasi nama file STRICT: nama file uploaded harus SAMA dengan basename target
+        const expectedName = path.basename(sf.rel);
+        const uploadedName = req.file.originalname || '';
+        if (uploadedName.toLowerCase() !== expectedName.toLowerCase()) {
+          cleanup();
+          return res.status(400).json({
+            error: `Nama file tidak cocok. Target: "${expectedName}", uploaded: "${uploadedName}". Untuk replace, nama file harus persis sama.`,
+          });
+        }
+
+        const buf = fs.readFileSync(req.file.path);
+        // Validasi JSON
+        if (/\.json$/i.test(sf.rel)) {
+          try { JSON.parse(buf.toString('utf8')); }
+          catch (e) { cleanup(); return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+        }
+
+        atomicWriteFile(sf.abs, buf);
+        cleanup();
+
+        const isProtected = PROTECTED.has(sf.rel);
+        audit.log(
+          req.auth.user,
+          isProtected ? 'files.replace.protected' : 'files.replace',
+          sf.rel,
+          `${buf.length} bytes`
+        );
+        log.info(`[files] REPLACE ${sf.rel} oleh ${req.auth.user}${isProtected ? ' (PROTECTED -> auto-restart)' : ''}`);
+
+        // Protected file selalu auto-restart (bukan cuma bot.js)
+        let restarting = false;
+        if (isProtected) {
+          restarting = true;
+          setTimeout(() => bus.emit('upload:bot'), 1500); // kasih waktu response sampai dulu
+        }
+
+        return res.json({
+          ok: true,
+          path: sf.rel,
+          protected: isProtected,
+          restarting,
+          message: isProtected
+            ? `${sf.rel} adalah file core (PROTECTED). Bot akan auto-restart dalam ~3 detik.`
+            : `${sf.rel} berhasil di-replace.`,
+        });
+      } catch (e) {
+        if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(400).json({ error: e.message });
+      }
+    }
+  );
+
+  // ----------- File Manager: upload (untuk file BARU saja) -----------
+  // (typo guard tetap aktif)
   app.post('/api/files/upload',
     requireDev,
     upload.single('file'),
@@ -850,7 +1009,7 @@ function start() {
             return res.status(409).json({
               status: 'exists',
               targetPath: sf.rel,
-              message: `File ${sf.rel} sudah ada. Pilih: update (timpa) atau batalkan dan rename file.`,
+              message: `File ${sf.rel} sudah ada. Gunakan tombol Replace di file tsb, atau ganti nama file ini.`,
             });
           }
           // target belum ada -> cek typo di direktori parent
@@ -869,7 +1028,7 @@ function start() {
                 name: s.name,
                 distance: s.distance,
               })),
-              message: `File "${fileName}" mirip dengan file existing (beda 1-2 huruf). Pilih: update file existing atau buat file baru.`,
+              message: `File "${fileName}" mirip dengan file existing (beda 1-2 huruf). Pilih: replace file existing (lewat button file tsb) atau buat file baru.`,
             });
           }
           // benar-benar baru -> minta konfirmasi sebagai NEW
@@ -896,16 +1055,16 @@ function start() {
           cleanup();
           audit.log(req.auth.user, 'files.upload.update', sf.rel, '');
           log.info(`[files] upload UPDATE ${sf.rel} oleh ${req.auth.user}`);
-          const isBot = sf.rel === 'src/bot.js';
-          if (isBot) setTimeout(() => bus.emit('upload:bot'), 1000);
-          return res.json({ ok: true, mode: 'update', path: sf.rel, restarting: isBot });
+          const isProtected = PROTECTED.has(sf.rel);
+          if (isProtected) setTimeout(() => bus.emit('upload:bot'), 1500);
+          return res.json({ ok: true, mode: 'update', path: sf.rel, restarting: isProtected });
         }
 
         // Mode 'create'
         if (mode === 'create') {
           if (exists) {
             cleanup();
-            return res.status(409).json({ error: `target ${sf.rel} sudah ada (gunakan mode=update)` });
+            return res.status(409).json({ error: `target ${sf.rel} sudah ada (gunakan tombol Replace di file tsb)` });
           }
           const buf = fs.readFileSync(req.file.path);
           if (/\.json$/i.test(sf.rel)) {
@@ -978,64 +1137,106 @@ function start() {
     res.json({ deleted });
   });
 
-  // ----------- DB Import -----------
-  app.post('/api/db/import', requireDev, requireConfirm, (req, res) => {
+  // =================================================================
+  //  DB Import -- per-tabel terpisah (req. user)
+  //
+  //  POST /api/db/import/maps       body: { content (json), mode: merge|replace }
+  //  POST /api/db/import/history    body: { content (csv|json), mode: merge|replace }
+  // =================================================================
+  app.post('/api/db/import/maps', requireDev, requireConfirm, (req, res) => {
     try {
-      const {
-        content,
-        mode = 'merge',           // 'merge' | 'replace'
-        includeMaps = true,
-        includeHistory = true,
-      } = req.body || {};
-      const data = typeof content === 'string' ? JSON.parse(content) : content;
-      if (!data || (!Array.isArray(data.map_data) && !Array.isArray(data.chat_history))) {
-        return res.status(400).json({ error: 'format JSON tidak valid (butuh map_data dan/atau chat_history array)' });
-      }
-      let mapInserted = 0, histInserted = 0, mapCleared = 0, histCleared = 0;
+      const { content, mode = 'merge' } = req.body || {};
+      let data;
+      try { data = typeof content === 'string' ? JSON.parse(content) : content; }
+      catch (e) { return res.status(400).json({ error: 'JSON map_data tidak valid: ' + e.message }); }
+      // Support 2 format: { rows: [...] } (backup format) atau { map_data: [...] } (legacy)
+      const rows = Array.isArray(data && data.rows) ? data.rows
+                : Array.isArray(data && data.map_data) ? data.map_data
+                : Array.isArray(data) ? data : null;
+      if (!rows) return res.status(400).json({ error: 'format JSON map_data tidak dikenali (butuh rows / map_data array)' });
+      let inserted = 0, cleared = 0;
       const trx = db.transaction(() => {
         if (mode === 'replace') {
-          if (includeMaps) {
-            mapCleared = db.prepare('SELECT COUNT(*) AS c FROM map_data').get().c;
-            db.exec('DELETE FROM map_data');
-          }
-          if (includeHistory) {
-            histCleared = db.prepare('SELECT COUNT(*) AS c FROM chat_history').get().c;
-            db.exec('DELETE FROM chat_history');
-          }
+          cleared = db.prepare('SELECT COUNT(*) AS c FROM map_data').get().c;
+          db.exec('DELETE FROM map_data');
         }
-        if (includeMaps && Array.isArray(data.map_data)) {
-          const ins = db.prepare('INSERT INTO map_data (topic, content, tags) VALUES (?, ?, ?)');
-          for (const m of data.map_data) {
-            if (m && m.topic && m.content) {
-              ins.run(String(m.topic), String(m.content), String(m.tags || ''));
-              mapInserted++;
-            }
-          }
-        }
-        if (includeHistory && Array.isArray(data.chat_history)) {
-          const ins = db.prepare(`INSERT INTO chat_history
-            (channel_id, user_id, question, question_norm, answer, source)
-            VALUES (?, ?, ?, ?, ?, ?)`);
-          for (const c of data.chat_history) {
-            if (c && c.question && c.answer) {
-              const norm = c.question_norm || cache.normalize(c.question);
-              ins.run(
-                String(c.channel_id || ''),
-                String(c.user_id || ''),
-                String(c.question),
-                String(norm),
-                String(c.answer),
-                String(c.source || 'imported')
-              );
-              histInserted++;
-            }
+        const ins = db.prepare('INSERT INTO map_data (topic, content, tags) VALUES (?, ?, ?)');
+        for (const m of rows) {
+          if (m && m.topic && m.content) {
+            ins.run(String(m.topic), String(m.content), String(m.tags || ''));
+            inserted++;
           }
         }
       });
       trx();
-      audit.log(req.auth.user, 'db.import', 'database',
-        JSON.stringify({ mode, mapInserted, histInserted, mapCleared, histCleared }));
-      res.json({ ok: true, mode, mapInserted, histInserted, mapCleared, histCleared });
+      audit.log(req.auth.user, 'db.import.maps', 'map_data',
+        JSON.stringify({ mode, inserted, cleared }));
+      res.json({ ok: true, table: 'map_data', mode, inserted, cleared });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/db/import/history', requireDev, requireConfirm, (req, res) => {
+    try {
+      const { content, mode = 'merge' } = req.body || {};
+      if (typeof content !== 'string' || !content.trim()) {
+        return res.status(400).json({ error: 'content kosong' });
+      }
+      // Auto-detect: CSV (default backup format) atau JSON
+      let rows;
+      const trimmed = content.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          rows = Array.isArray(parsed && parsed.rows) ? parsed.rows
+              :  Array.isArray(parsed && parsed.chat_history) ? parsed.chat_history
+              :  Array.isArray(parsed) ? parsed : null;
+          if (!rows) return res.status(400).json({ error: 'format JSON tidak dikenali' });
+        } catch (e) { return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+      } else {
+        // Parse CSV (header line + data lines, RFC4180 quoted)
+        rows = [];
+        const lines = trimmed.split(/\r?\n/);
+        const header = parseCsvLine(lines[0]);
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.trim()) continue;
+          const cells = parseCsvLine(line);
+          const obj = {};
+          for (let j = 0; j < header.length; j++) obj[header[j]] = cells[j] || '';
+          rows.push(obj);
+        }
+      }
+
+      let inserted = 0, cleared = 0;
+      const trx = db.transaction(() => {
+        if (mode === 'replace') {
+          cleared = db.prepare('SELECT COUNT(*) AS c FROM chat_history').get().c;
+          db.exec('DELETE FROM chat_history');
+        }
+        const ins = db.prepare(`INSERT INTO chat_history
+          (channel_id, user_id, question, question_norm, answer, source)
+          VALUES (?, ?, ?, ?, ?, ?)`);
+        for (const c of rows) {
+          if (c && c.question && c.answer) {
+            const norm = c.question_norm || cache.normalize(c.question);
+            ins.run(
+              String(c.channel_id || ''),
+              String(c.user_id || ''),
+              String(c.question),
+              String(norm),
+              String(c.answer),
+              String(c.source || 'imported')
+            );
+            inserted++;
+          }
+        }
+      });
+      trx();
+      audit.log(req.auth.user, 'db.import.history', 'chat_history',
+        JSON.stringify({ mode, inserted, cleared }));
+      res.json({ ok: true, table: 'chat_history', mode, inserted, cleared });
     } catch (e) {
       res.status(400).json({ error: e.message });
     }
