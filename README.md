@@ -217,3 +217,80 @@ disarankan untuk fundamental bot:
 
 Cara import: Dashboard -> tab **Backup DB** -> Import -> upload JSON ->
 mode `replace` (kalau DB kosong) atau `merge` (kalau mau tambah).
+
+
+
+## Scope Guard & Anti-Exploit (2-Layer Defense)
+
+### Layer 1: Pre-filter regex di Node (bot.js)
+
+`looksLikeExploitQuery()` pakai 24 regex pattern untuk hard-block sebelum
+panggil Gemini (hemat token + jawaban instan). Pattern conservatif - sinyal
+kuat saja:
+
+- **Tools**: synapse, krnl, fluxus, jjsploit, hydrogen, delta executor, dst.
+- **Cheat moves**: aimbot, wallhack, noclip, godmode, speed/fly hack, kill aura
+- **Dupe**: any "dupe" reference dalam konteks Roblox
+- **Ask + verb**: "cara/gimana/how to" + "cheat/exploit/hack/bypass/inject/dupe"
+- **Bug abuse**: "bug abuse", "abuse glitch"
+- **Bypass anti-cheat**: "bypass byfron", "bypass HWID", "ban evasion"
+- **Inject script**: "inject script/dll/trainer"
+- **Indonesian slang**: "ngecheat", "ngehack", "curangin"
+
+False-positive guards: "ada cheater" (reporting), "fix bug" (legitimate),
+"akun ke-hack" (victim) → tetap pass through ke Gemini.
+
+### Layer 2: Prompt persona (personality.js)
+
+Persona berisi rules eksplisit:
+
+- **CAKUPAN**: hanya jawab Roblox umum + map yang ada di DATA MAP.
+  Map lain (Adopt Me, Brookhaven, dll. yang ga di-list) → tolak.
+  Topik non-Roblox (politik, agama, finansial, dll.) → tolak.
+- **ANTI-EXPLOIT**: tolak tegas, sebut Roblox ToS + UU ITE Pasal 30/32/33,
+  jangan kasih workaround.
+
+### Layer 3: Empty DB handling
+
+Kalau `mapData.listMaps().length === 0`, prompt diberi flag `dbEmpty=true`.
+Gemini diinstruksikan untuk:
+- Pertanyaan map spesifik → "wah database map masih kosong, admin belum input data"
+- Pertanyaan Roblox umum → tetap dijawab seperti biasa
+
+### Refusal Message
+
+Bilingual (Indonesia + English):
+
+> "wah maaf, yanto gak bantu soal cheat/exploit/bug abuse. Itu ngelanggar
+> **Roblox Terms of Service** dan bisa kena **UU ITE Pasal 30, 32, dan 33**
+> (akses ilegal & manipulasi sistem elektronik di Indonesia). Mainnya yang
+> fair yaa, biar map-nya tetap aman buat semua player.
+>
+> (EN) sorry bro, no help with cheats/exploits/bug abuse. It violates
+> Roblox ToS and Indonesian ITE Law (Articles 30/32/33) about unauthorized
+> system access and data manipulation. Play fair."
+
+### Audit Log
+
+Setiap exploit attempt dicatat di tabel `audit_log`:
+- `user`: `discord:<userId>`
+- `action`: `exploit.refused`
+- `target`: `channel:<channelId>`
+- `details`: pertanyaan user (truncated 300 char)
+
+Bisa dilihat di tab **Audit Log** dashboard, filter `exploit` di search bar.
+
+### Edge Cases yang Ditangani
+
+| Pesan user | Hasil |
+|------------|-------|
+| "yanto, gimana cara cheat?" | BLOCK (refusal + audit) |
+| "yanto, mau pake synapse" | BLOCK |
+| "yanto, ada cheater di server" | PASS - empati, arahkan lapor admin |
+| "yanto, akun gua ke-hack" | PASS - bantu recovery (general Roblox) |
+| "yanto, gimana cara fix bug?" | PASS - dev question, OK |
+| "yanto, Adopt Me itu apa?" | Pass ke Gemini → tolak (map lain, scope rule) |
+| "yanto, siapa Presiden Indonesia?" | Pass ke Gemini → tolak (non-Roblox) |
+| "yanto, NPC di Pantai Spawn?" | Pass ke Gemini → jawab dari DATA MAP |
+| (DB kosong) "yanto, level cap?" | Pass ke Gemini → "DB masih kosong" |
+| (DB kosong) "yanto, Roblox itu apa?" | Pass ke Gemini → jawab Roblox umum |

@@ -8,6 +8,7 @@ const log     = require('./utils/logger');
 const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
+const audit   = require('./db/audit');
 const runtime = require('./utils/runtimeEnv');
 const { bus } = require('./utils/hotReload');
 
@@ -51,7 +52,70 @@ const MSG = {
   timeout:  (n, m) => `maaf yah ${m} ${lower(n)} bungkam, kamu gasabaran sih jadi manusia, ${lower(n)} robot bukan nabi boyyy...`,
   empty:    (n) => `iya, ada apa? tanya aja, sebut "${lower(n)}" + pertanyaannya.`,
   errorApi: ()  => `aduh otak gue lagi nge-lag (API error). coba lagi sebentar yaa.`,
+  exploit:  (n) => `wah maaf, ${lower(n)} gak bantu soal cheat/exploit/bug abuse. ` +
+                   `Itu ngelanggar **Roblox Terms of Service** dan bisa kena ` +
+                   `**UU ITE Pasal 30, 32, dan 33** (akses ilegal & manipulasi ` +
+                   `sistem elektronik di Indonesia). Mainnya yang fair yaa, biar ` +
+                   `map-nya tetap aman buat semua player.\n\n` +
+                   `(EN) sorry bro, no help with cheats/exploits/bug abuse. ` +
+                   `It violates Roblox ToS and Indonesian ITE Law (Articles 30/32/33) ` +
+                   `about unauthorized system access and data manipulation. Play fair.`,
 };
+
+// =================================================================
+//  Anti-exploit pre-filter
+//  Pre-block sebelum Gemini dipanggil (hemat token + hard refusal).
+//  Konservatif: hanya block sinyal kuat. Sisa nuance ditangani prompt.
+// =================================================================
+const EXPLOIT_PATTERNS = [
+  // Tools - script executor (universally exploit)
+  /\b(?:synapse(?:\s*x)?|krnl|fluxus|jjsploit|hydrogen|delta\s*executor|sentinel\s*executor|script\s+executor|roblox\s+executor|wave\s+executor|valyse)\b/i,
+
+  // Cheat-specific terms (no legitimate casual use)
+  /\baimbot\b/i,
+  /\bwall.?hack(?:s|ing)?\b/i,
+  /\bno.?clip(?:ping)?\b/i,
+  /\bgod.?mode\b/i,
+  /\bspeed.?hack\b/i,
+  /\bfly.?hack\b/i,
+  /\bkill.?aura\b/i,
+  /\besp\s+(?:roblox|game|hack|cheat|tool|script)/i,
+
+  // Dupe (almost always exploit context in Roblox)
+  /\bdupe\s*(?:glitch|method|item|exploit|trick|tip|cara|gimana|hack)?\b/i,
+
+  // Ask patterns + exploit verb
+  /\b(?:how\s+to|how\s+do\s+i|cara|tutorial|share|kasih|ngajarin|teach\s+me|gimana(?:\s+cara)?|bagaimana(?:\s+cara)?)\b.{0,50}\b(?:cheat|exploit|hack|bypass|inject|crack|dupe)\b/i,
+
+  // Exploit verb + ask
+  /\b(?:cheat|exploit|hack|bypass|inject|dupe)\b.{0,30}\b(?:method|cara|tutorial|trick|script|tool|software|step)\b/i,
+
+  // Give/share/send + cheat
+  /\b(?:give|share|send|kirim|kirimin|kasih|bagi|bagiin|drop|drop\s+it)\s+(?:me\s+)?(?:cheat|exploit|hack|script|injector|dupe)\b/i,
+
+  // Bug abuse / glitch abuse
+  /\bbug\s+(?:abuse|abusing|exploit|exploiting)\b/i,
+  /\babus(?:e|ing)\s+(?:bug|glitch|exploit)\b/i,
+  /\bglitch\s+abuse\b/i,
+
+  // Bypass anti-cheat / ban evasion
+  /\bbypass\s+(?:anti.?cheat|ban|hwid|protection|guard|byfron|hyperion)\b/i,
+  /\bban\s+evasion\b/i,
+  /\balt\s+account\s+(?:ban|exploit)\b/i,
+
+  // Inject script
+  /\binject(?:or|ing|ion)?\s+(?:script|dll|code|trainer|cheat|hack)\b/i,
+
+  // Indonesian slang
+  /\bnge.?(?:cheat|exploit|hack|bypass)\b/i,
+  /\b(?:cara|gimana|bagaimana|how)\b.{0,30}\bcurang\b/i,
+  /\bcurang(?:in|i|kan)\b/i,
+];
+
+function looksLikeExploitQuery(text) {
+  const s = String(text || '');
+  return EXPLOIT_PATTERNS.some((re) => re.test(s));
+}
 
 // ---- state ----
 let SLEEPING = true;
@@ -329,6 +393,20 @@ bus.on('shutdown',   () => gracefulShutdown('tombol matikan bot'));
 // =================================================================
 async function processQuestion(question, msg, opts = {}) {
   const { allowReserve = false, isDeferred = false } = opts;
+
+  // 0) Pre-filter ANTI-EXPLOIT (hard refusal, tanpa panggil Gemini)
+  if (looksLikeExploitQuery(question)) {
+    log.warn(`[exploit-block] user=${msg.author.id} q="${question.slice(0, 100)}"`);
+    audit.log(
+      `discord:${msg.author.id}`,
+      'exploit.refused',
+      `channel:${msg.channelId}`,
+      question.slice(0, 300)
+    );
+    await msg.reply(MSG.exploit(botName()));
+    return;
+  }
+
   const cfg = loadCfg();
 
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
@@ -340,12 +418,17 @@ async function processQuestion(question, msg, opts = {}) {
     return;
   }
 
+  // 1) Cek status DB - kalau kosong, kasih flag ke prompt supaya Gemini
+  //    tolak pertanyaan map spesifik tapi tetap jawab Roblox umum.
+  const allMaps = mapData.listMaps();
+  const dbEmpty = allMaps.length === 0;
+
   // Gemini multilingual natively -- TIDAK perlu deteksi bahasa di sini.
-  // Persona sudah berisi instruksi "ikuti bahasa user".
   const { buildSystemPrompt } = loadPersonality();
   const mapCtx = mapData.buildContext(question);
   const sysPrompt = buildSystemPrompt({
     name: botName(),
+    dbEmpty,
     mapContext: mapCtx,
     extraNote: followUp
       ? 'User minta jawaban LEBIH DETAIL/SPESIFIK dari sebelumnya. Tambahkan rincian relevan dari DATA MAP.'
@@ -354,7 +437,7 @@ async function processQuestion(question, msg, opts = {}) {
   const recent = cache.recentContext(msg.channelId, cfg.history.maxContextMessages);
   const history = [
     { role: 'user',  text: sysPrompt },
-    { role: 'model', text: `Siap, gue ${botName()}. Gas tanya apa aja soal map.` },
+    { role: 'model', text: `Siap, gue ${botName()}. Gas tanya soal Roblox / map yang ada di catatan gue.` },
   ];
   for (const r of recent) {
     history.push({ role: 'user',  text: r.question });
@@ -372,7 +455,7 @@ async function processQuestion(question, msg, opts = {}) {
       userId: msg.author.id,
       question,
       answer,
-      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}`,
+      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}${dbEmpty ? '+dbEmpty' : ''}`,
     });
   }
   await sendLong(msg, answer);
@@ -464,6 +547,23 @@ client.on(Events.MessageCreate, async (msg) => {
     const rawQuestion = stripKeyword(msg.content, keyword);
     if (!rawQuestion) {
       await msg.reply(MSG.empty(botName()));
+      return;
+    }
+
+    // Pre-filter ANTI-EXPLOIT di top-level juga (cover spam mode + jalur deferred)
+    if (looksLikeExploitQuery(rawQuestion)) {
+      log.warn(`[exploit-block] user=${msg.author.id} q="${rawQuestion.slice(0, 100)}"`);
+      audit.log(
+        `discord:${msg.author.id}`,
+        'exploit.refused',
+        `channel:${msg.channelId}`,
+        rawQuestion.slice(0, 300)
+      );
+      // Cancel deferred answer kalau user lagi WAITING (mereka sudah salahin haknya)
+      const w = WAITING.get(msg.author.id);
+      if (w && w.handle) clearTimeout(w.handle);
+      WAITING.delete(msg.author.id);
+      await msg.reply(MSG.exploit(botName()));
       return;
     }
 
