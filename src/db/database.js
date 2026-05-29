@@ -61,6 +61,31 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_user    ON audit_log(user);
+
+-- ============================================================
+--  CHAT LOG (logger 2): persistent SQLite, FIFO max 1000
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  discord_id   TEXT    NOT NULL,
+  username     TEXT    NOT NULL,
+  question     TEXT    NOT NULL,
+  answer       TEXT    NOT NULL,
+  source       TEXT    NOT NULL DEFAULT 'gemini',
+  asked_at     INTEGER NOT NULL,
+  answered_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chatlog_asked ON chat_log(asked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chatlog_user  ON chat_log(discord_id);
+
+CREATE TRIGGER IF NOT EXISTS chat_log_cap
+AFTER INSERT ON chat_log
+WHEN (SELECT COUNT(*) FROM chat_log) > 1000
+BEGIN
+  DELETE FROM chat_log WHERE id NOT IN (
+    SELECT id FROM chat_log ORDER BY id DESC LIMIT 1000
+  );
+END;
 `);
 
 module.exports = db;

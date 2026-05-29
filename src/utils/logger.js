@@ -1,5 +1,16 @@
 'use strict';
 
+/**
+ * Logger 1 (Server logs).
+ *
+ * Sifat (req. user):
+ *   - SENORMAL & SEOPTIMAL mungkin -> in-memory, FIFO 1000 entries.
+ *   - Errors di-protect: kalau buffer penuh, eviction prefer non-error dulu.
+ *     Errors stays sampai server restart (yang otomatis clear semua).
+ *
+ * Intercept console.log/warn/error/info.
+ */
+
 const { EventEmitter } = require('events');
 
 const bus = new EventEmitter();
@@ -37,15 +48,21 @@ function emit(level, args) {
       level,
       msg: fmt(args).slice(0, 4000),
     };
+
+    // Eviction: kalau penuh, buang non-error dulu (errors di-protect).
+    if (buffer.length >= MAX_BUFFER) {
+      const idx = buffer.findIndex((e) => e.level !== 'error');
+      if (idx !== -1) buffer.splice(idx, 1);
+      else buffer.shift(); // semua errors -> evict oldest error
+    }
+
     buffer.push(entry);
-    while (buffer.length > MAX_BUFFER) buffer.shift();
     bus.emit('log', entry);
   } finally {
     emitting = false;
   }
 }
 
-// Intercept console (sekali saja).
 const orig = {
   log:   console.log.bind(console),
   warn:  console.warn.bind(console),
@@ -62,10 +79,27 @@ function info(...a)  { console.log(`[${ts()}] [INFO]`, ...a); }
 function warn(...a)  { console.warn(`[${ts()}] [WARN]`, ...a); }
 function error(...a) { console.error(`[${ts()}] [ERR ]`, ...a); }
 
-function getBuffer(since) {
+function getBuffer(since, levelFilter) {
   const sinceN = Number(since) || 0;
-  if (sinceN > 0) return buffer.filter((e) => e.ts > sinceN);
-  return buffer.slice(-300);
+  let arr = sinceN > 0 ? buffer.filter((e) => e.ts > sinceN) : buffer.slice(-300);
+  if (levelFilter && levelFilter !== 'all') {
+    arr = arr.filter((e) => e.level === levelFilter);
+  }
+  return arr;
+}
+
+function getErrors() {
+  return buffer.filter((e) => e.level === 'error');
+}
+
+function stats() {
+  let errors = 0, warns = 0, normal = 0;
+  for (const e of buffer) {
+    if (e.level === 'error') errors++;
+    else if (e.level === 'warn') warns++;
+    else normal++;
+  }
+  return { total: buffer.length, errors, warns, normal };
 }
 
 function subscribe(cb) {
@@ -73,4 +107,4 @@ function subscribe(cb) {
   return () => bus.off('log', cb);
 }
 
-module.exports = { info, warn, error, getBuffer, subscribe };
+module.exports = { info, warn, error, getBuffer, getErrors, stats, subscribe };

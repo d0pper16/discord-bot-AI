@@ -33,6 +33,7 @@ $$('nav.tabs button').forEach(btn => {
     $('#tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'audit')      loadAudit();
     if (btn.dataset.tab === 'logs')       resumeLogPolling();
+    if (btn.dataset.tab === 'chatlog')    loadChatLog();
     if (btn.dataset.tab === 'connection') loadConnection();
     if (btn.dataset.tab === 'monitor')    refreshSystem(true);
     if (btn.dataset.tab === 'roblox')     refreshRoblox(true);
@@ -961,6 +962,55 @@ $('#db-import-form').onsubmit = async (e) => {
 };
 
 loadFiles();
+
+// =================================================================
+//  CHAT LOG (Logger 2 - persisten SQLite)
+// =================================================================
+async function loadChatLog(q = '') {
+  const url = '/api/chat-log?limit=500' + (q ? '&q=' + encodeURIComponent(q) : '');
+  const data = await fetch(url).then(r => r.json());
+  const tbody = $('#chatlog-table tbody');
+  tbody.innerHTML = '';
+  for (const r of data.entries) {
+    const askedDt    = new Date((r.asked_at || 0) * 1000);
+    const answeredDt = new Date((r.answered_at || 0) * 1000);
+    const askHHMM    = `${String(askedDt.getHours()).padStart(2,'0')}:${String(askedDt.getMinutes()).padStart(2,'0')}`;
+    const ansHHMM    = `${String(answeredDt.getHours()).padStart(2,'0')}:${String(answeredDt.getMinutes()).padStart(2,'0')}`;
+    const askFull    = askedDt.toISOString().slice(0, 19).replace('T', ' ');
+    const ansFull    = answeredDt.toISOString().slice(0, 19).replace('T', ' ');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td title="${esc(askFull)}"><b>${askHHMM}</b></td>
+      <td title="${esc(ansFull)}"><b>${ansHHMM}</b></td>
+      <td>${esc(r.username || '-')}</td>
+      <td><code style="font-size:11px">${esc(r.discord_id || '-')}</code></td>
+      <td><div class="cell">${esc(r.question)}</div></td>
+      <td><div class="cell">${esc((r.answer || '').slice(0, 250))}${r.answer && r.answer.length > 250 ? '...' : ''}</div></td>
+      <td><small>${esc(r.source || '-')}</small></td>`;
+    tbody.appendChild(tr);
+  }
+  $('#chatlog-count').textContent = `${data.entries.length} ditampilkan / ${data.total} total (max 1000)`;
+}
+let chatlogTimer = null;
+$('#chatlog-search').addEventListener('input', (e) => {
+  clearTimeout(chatlogTimer);
+  chatlogTimer = setTimeout(() => loadChatLog(e.target.value.trim()), 250);
+});
+$('#chatlog-refresh').onclick = () => loadChatLog($('#chatlog-search').value);
+$('#chatlog-clear').onclick = async () => {
+  const yes = await askYesNo(
+    'Yakin hapus SEMUA chat log? Persistent data di SQLite akan dihapus permanen. Tindakan ini tidak bisa di-undo.',
+    'Hapus Semua Chat Log'
+  );
+  if (!yes) return;
+  const ok = await jsonWrite('DELETE', '/api/chat-log', {}, 'Konfirmasi terakhir: hapus semua chat log.');
+  if (ok) {
+    const d = await ok.json();
+    alert(`${d.deleted} entries dihapus.`);
+    loadChatLog();
+  }
+};
+loadChatLog();
 
 // =================================================================
 //  Helpers

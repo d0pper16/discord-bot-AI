@@ -11,6 +11,7 @@ const multer    = require('multer');
 const log     = require('../utils/logger');
 const mapData = require('../db/mapData');
 const cache   = require('../db/chatHistory');
+const chatLog = require('../db/chatLog');
 const gemini  = require('../ai/gemini');
 const audit   = require('../db/audit');
 const db      = require('../db/database');
@@ -411,10 +412,30 @@ function start() {
     });
   });
 
-  // ---- Server Logs (polling) ----
+  // ---- Server Logs (logger 1, in-memory) ----
   app.get('/api/logs', (req, res) => {
     const since = Number(req.query.since) || 0;
-    res.json({ now: Date.now(), entries: log.getBuffer(since) });
+    const level = req.query.level || 'all';
+    res.json({
+      now: Date.now(),
+      stats: log.stats(),
+      entries: log.getBuffer(since, level),
+    });
+  });
+
+  // ---- Chat Log (logger 2, persisten SQLite) ----
+  app.get('/api/chat-log', (req, res) => {
+    const q     = req.query.q || '';
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    res.json({
+      total: chatLog.count(),
+      entries: chatLog.search(q, limit),
+    });
+  });
+  app.delete('/api/chat-log', requireDev, requireConfirm, (req, res) => {
+    const deleted = chatLog.clearAll();
+    audit.log(req.auth.user, 'chatLog.clearAll', 'all', `${deleted} rows`);
+    res.json({ deleted });
   });
 
   // ---- Connection (channel + 2 API key) -- read masked ----

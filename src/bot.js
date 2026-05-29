@@ -8,6 +8,7 @@ const log     = require('./utils/logger');
 const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
+const chatLog = require('./db/chatLog');
 const audit   = require('./db/audit');
 const runtime = require('./utils/runtimeEnv');
 const robloxWatcher = require('./roblox/watcher');
@@ -42,15 +43,16 @@ function botKeyword(){ try { return loadCfg().keyword || 'yanto'; } catch (_) { 
 const ucfirst = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase();
 const lower   = (s) => String(s).toLowerCase();
 
-// ---- pesan boilerplate (selalu Indonesia, sesuai req. user) ----
+// ---- pesan boilerplate (selalu Indonesia) ----
+// Catatan: TIDAK pakai @user di template -- helper reply() yang prepend @user.
 const MSG = {
   hello:    (n) => `halo, kenalin aku ${lower(n)} aku adalah AI paling ganteng sedunia, yang siap membantu menjawab pertanyaan kalian di server ini, tinggal sebut aja namaku "${lower(n)}" maka aku akan menjawab semua pertanyaan kalian`,
   back:     (n) => `hoamm... enak banget ${lower(n)} tidurnya walau gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone`,
   farewell: (n) => `${ucfirst(n)} capek, ${lower(n)} tidur dulu yaa, babay semua... @everyone`,
   apiFail:  ()  => `maaf yah, token/API kamu salah/error nih, aku gagal mendarat`,
   sabar:    ()  => `sabar ya kak, kasih aku mikir dulu 1 menit yaa`,
-  warn:     (n, m) => `jika kamu tidak bisa bersabar maka akan ${lower(n)} bungkam ya ${m}`,
-  timeout:  (n, m) => `maaf yah ${m} ${lower(n)} bungkam, kamu gasabaran sih jadi manusia, ${lower(n)} robot bukan nabi boyyy...`,
+  warn:     (n) => `jika kamu tidak bisa bersabar maka akan ${lower(n)} bungkam yaa`,
+  timeout:  (n) => `maaf, ${lower(n)} bungkam, kamu gasabaran sih jadi manusia, ${lower(n)} robot bukan nabi boyyy...`,
   empty:    (n) => `iya, ada apa? tanya aja, sebut "${lower(n)}" + pertanyaannya.`,
   errorApi: ()  => `aduh otak gue lagi nge-lag (API error). coba lagi sebentar yaa.`,
   exploit:  (n) => `wah maaf, ${lower(n)} gak bantu soal cheat/exploit/bug abuse. ` +
@@ -61,6 +63,7 @@ const MSG = {
                    `(EN) sorry bro, no help with cheats/exploits/bug abuse. ` +
                    `It violates Roblox ToS and Indonesian ITE Law (Articles 30/32/33) ` +
                    `about unauthorized system access and data manipulation. Play fair.`,
+  deferredErr: () => `masih limit nih, coba beberapa menit lagi yaa.`,
 };
 
 // =================================================================
@@ -155,14 +158,45 @@ function isSpecificFollowup(text, triggers = []) {
   return triggers.some((k) => t.includes(String(k).toLowerCase()));
 }
 async function sendLong(msg, content) {
+  const mention = `<@${msg.author.id}>`;
   const max = 1900;
-  if (content.length <= max) return msg.reply(content);
-  let first = true;
-  for (let i = 0; i < content.length; i += max) {
-    const part = content.slice(i, i + max);
-    if (first) { await msg.reply(part); first = false; }
-    else       { await msg.channel.send(part); }
+  // Chunk pertama: prepend @user mention; sisanya plain channel.send (1 thread).
+  if ((mention.length + 1 + content.length) <= max) {
+    return msg.reply({
+      content: `${mention} ${content}`,
+      allowedMentions: { users: [msg.author.id], repliedUser: false },
+    });
   }
+  let first = true;
+  let i = 0;
+  while (i < content.length) {
+    const slot = first ? max - mention.length - 1 : max;
+    const part = content.slice(i, i + slot);
+    if (first) {
+      await msg.reply({
+        content: `${mention} ${part}`,
+        allowedMentions: { users: [msg.author.id], repliedUser: false },
+      });
+      first = false;
+    } else {
+      await msg.channel.send(part);
+    }
+    i += slot;
+  }
+}
+
+/**
+ * Helper reply: selalu prepend @user mention. Suppress reply-ping (avoid double).
+ * Pakai utk semua boilerplate (sabar/warn/timeout/empty/errorApi/exploit/dst.).
+ */
+async function reply(msg, content) {
+  const mention = `<@${msg.author.id}>`;
+  // hindari double mention bila konten sudah terdapat mention
+  const text = content.includes(mention) ? content : `${mention} ${content}`;
+  return msg.reply({
+    content: text,
+    allowedMentions: { users: [msg.author.id], repliedUser: false },
+  });
 }
 async function sendToTargetChannel(content) {
   const id = process.env.YANTO_CHANNEL_ID;
@@ -414,7 +448,7 @@ async function processQuestion(question, msg, opts = {}) {
       `channel:${msg.channelId}`,
       question.slice(0, 300)
     );
-    await msg.reply(MSG.exploit(botName()));
+    await reply(msg, MSG.exploit(botName()));
     return;
   }
 
@@ -422,10 +456,20 @@ async function processQuestion(question, msg, opts = {}) {
 
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
   const hit = cache.findSimilar(question, cfg.cache.similarityThreshold);
+  const askedAt = Math.floor((msg.createdTimestamp || Date.now()) / 1000);
 
   if (hit && !followUp) {
     log.info(`[cache] hit (score=${hit.score.toFixed(2)}) -> ${question.slice(0, 60)}`);
     await sendLong(msg, hit.row.answer);
+    chatLog.add({
+      discordId: msg.author.id,
+      username:  msg.author.username || msg.author.tag || 'unknown',
+      question,
+      answer:    hit.row.answer,
+      source:    `cache:${hit.row.id}`,
+      askedAt,
+      answeredAt: Math.floor(Date.now() / 1000),
+    });
     return;
   }
 
@@ -472,6 +516,17 @@ async function processQuestion(question, msg, opts = {}) {
     });
   }
   await sendLong(msg, answer);
+
+  // Logger 2: chat log persisten
+  chatLog.add({
+    discordId: msg.author.id,
+    username:  msg.author.username || msg.author.tag || 'unknown',
+    question,
+    answer,
+    source:    `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}${dbEmpty ? '+dbEmpty' : ''}`,
+    askedAt,
+    answeredAt: Math.floor(Date.now() / 1000),
+  });
 }
 
 // =================================================================
@@ -479,7 +534,6 @@ async function processQuestion(question, msg, opts = {}) {
 // =================================================================
 async function handleRateLimited(msg, question) {
   const userId  = msg.author.id;
-  const mention = `<@${userId}>`;
   const w = WAITING.get(userId);
 
   if (!w) {
@@ -489,23 +543,18 @@ async function handleRateLimited(msg, question) {
         await processQuestion(question, msg, { allowReserve: true, isDeferred: true });
       } catch (err) {
         log.error('[deferred] gagal:', err.message);
-        try {
-          await msg.channel.send({
-            content: `${mention} masih limit nih, coba beberapa menit lagi yaa.`,
-            allowedMentions: { parse: ['users'] },
-          });
-        } catch (_) {}
+        try { await reply(msg, MSG.deferredErr()); } catch (_) {}
       }
     }, SABAR_WAIT_MS);
 
     WAITING.set(userId, { count: 1, ts: Date.now(), handle, question });
-    await msg.reply(MSG.sabar());
+    await reply(msg, MSG.sabar());
     return;
   }
 
   w.count++;
   if (w.count === 2) {
-    await msg.reply(MSG.warn(botName(), mention));
+    await reply(msg, MSG.warn(botName()));
     return;
   }
 
@@ -526,7 +575,7 @@ async function handleRateLimited(msg, question) {
     log.warn('[timeout] gagal Discord-timeout:', err.message);
   }
   TIMEOUTS.set(userId, Date.now() + TIMEOUT_DURATION_MS);
-  try { await msg.reply(MSG.timeout(botName(), mention)); } catch (_) {}
+  try { await reply(msg, MSG.timeout(botName())); } catch (_) {}
 }
 
 // =================================================================
@@ -559,7 +608,7 @@ client.on(Events.MessageCreate, async (msg) => {
 
     const rawQuestion = stripKeyword(msg.content, keyword);
     if (!rawQuestion) {
-      await msg.reply(MSG.empty(botName()));
+      await reply(msg, MSG.empty(botName()));
       return;
     }
 
@@ -576,7 +625,7 @@ client.on(Events.MessageCreate, async (msg) => {
       const w = WAITING.get(msg.author.id);
       if (w && w.handle) clearTimeout(w.handle);
       WAITING.delete(msg.author.id);
-      await msg.reply(MSG.exploit(botName()));
+      await reply(msg, MSG.exploit(botName()));
       return;
     }
 
@@ -598,7 +647,7 @@ client.on(Events.MessageCreate, async (msg) => {
         return handleRateLimited(msg, rawQuestion);
       }
       log.error('processQuestion error:', err.message);
-      try { await msg.reply(MSG.errorApi()); } catch (_) {}
+      try { await reply(msg, MSG.errorApi()); } catch (_) {}
     }
   } catch (err) {
     log.error('handler error:', err);

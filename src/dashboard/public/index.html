@@ -37,6 +37,7 @@
   <button data-tab="history">Riwayat Chat</button>
   <button data-tab="audit">Audit Log</button>
   <button data-tab="logs">Server Logs</button>
+  <button data-tab="chatlog">Chat Log</button>
   <button data-tab="db">Backup DB</button>
 </nav>
 
@@ -417,6 +418,38 @@
     <button id="logs-clear" class="secondary">Clear viewer</button>
   </div>
   <div id="logs-output" class="logs-output"></div>
+</section>
+
+<!-- ====== CHAT LOG (Logger 2 - persisten) ====== -->
+<section id="tab-chatlog" class="tab">
+  <h2>Chat Log <small style="color:var(--text-muted);font-weight:400">(logger 2 - persisten lintas restart)</small></h2>
+  <p class="hint">
+    Riwayat pertanyaan & jawaban Discord (max 1000 entries, FIFO).
+    Disimpan di SQLite tabel <code>chat_log</code> -> <b>tetap ada walau bot restart</b>.
+    Pesan ke-1001 otomatis menggeser pesan paling lama (entry terlama dihapus).
+  </p>
+  <div class="history-toolbar">
+    <input id="chatlog-search" type="text" placeholder="cari username / discord ID / pertanyaan / jawaban...">
+    <button id="chatlog-refresh" class="secondary">Refresh</button>
+    <button id="chatlog-clear" class="danger writer">Hapus Semua</button>
+    <span id="chatlog-count" class="hint"></span>
+  </div>
+  <div class="history-scroll">
+    <table id="chatlog-table">
+      <thead>
+        <tr>
+          <th>Tanya</th>
+          <th>Jawab</th>
+          <th>Username</th>
+          <th>Discord ID</th>
+          <th>Pertanyaan</th>
+          <th>Jawaban</th>
+          <th>Sumber</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </section>
 
 <!-- ====== BACKUP DB ====== -->

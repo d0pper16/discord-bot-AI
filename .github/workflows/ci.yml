@@ -59,6 +59,7 @@ jobs:
             "src/db/database.js"
             "src/db/mapData.js"
             "src/db/chatHistory.js"
+            "src/db/chatLog.js"
             "src/db/audit.js"
             "src/dashboard/server.js"
             "src/dashboard/public/index.html"
