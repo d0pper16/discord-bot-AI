@@ -1,0 +1,83 @@
+{
+  "exportedAt": "2026-05-29T00:00:00.000Z",
+  "version": 1,
+  "_note": "Contoh database map Roblox 'Petualangan Pulau Yantoland'. Import via Dashboard -> Backup DB -> Import (mode: replace untuk ganti seluruh DB, atau merge untuk tambah ke existing).",
+  "map_data": [
+    {
+      "topic": "Tentang Map - Petualangan Pulau Yantoland",
+      "tags": "info, umum, overview, gameplay",
+      "content": "Petualangan Pulau Yantoland adalah map adventure 1-12 player. Mode: PvE explorer + zona PvP opsional. Tema: pulau tropis dengan misteri kuno. Total 5 zona besar: Pantai Spawn, Hutan Bambu, Gua Kristal, Puncak Vulkanik, Reruntuhan Kuno. Sistem level 1-50, currency utama 'Koin Emas' (KE). Estimasi waktu tamat (full clear): 8-12 jam main aktif."
+    },
+    {
+      "topic": "Pantai Spawn - Zona 1",
+      "tags": "pantai, spawn, lobby, level 1-5, npc",
+      "content": "Lokasi spawn awal pemain. Zona aman (mob tidak spawn). 3 NPC penting: (1) Pak Kapten - jual peta zona seharga 50 KE per zona, kasih quest harian 'Patrol Pulau' (hadiah 300 KE/hari). (2) Bu Dewi - heal gratis tiap 30 detik di radius 3 meter, jual potion HP 25 KE. (3) Pengrajin Andi - upgrade equipment level 1-10, butuh material + KE. Dock di utara untuk perahu ke pulau tetangga (event mingguan). Easter egg: di balik air terjun pojok timur ada peti 100 KE, respawn 1 jam realtime."
+    },
+    {
+      "topic": "Hutan Bambu - Zona 2",
+      "tags": "hutan, bambu, mob, level 5-15, quest",
+      "content": "Zona PvE pertama. Akses bebas dari Pantai Spawn lewat jembatan kayu utara. Mob spawn: Babi Hutan (HP 50, ATK 8, drop 'daging mentah' jual 5 KE), Ular Hijau (HP 30, ATK 12, drop 'racun ular' jual 10 KE). Quest 'Cari 10 Daun Bambu Langka' dari Pak Tani Joko di gubuk tengah hutan - hadiah 200 KE + Amulet Pertahanan +5. Boss zona: Babi Raja (HP 250, ATK 20), spawn tiap 15 menit di clearing tengah, drop 'Kunci Batu' (akses Gua Kristal) + 100-200 KE."
+    },
+    {
+      "topic": "Gua Kristal - Zona 3",
+      "tags": "gua, mining, level 10-20, kunci batu, ore",
+      "content": "Pintu masuk di sebelah selatan Hutan Bambu, butuh 'Kunci Batu' dari Babi Raja (atau beli dari player lain). Sistem mining: 4 jenis ore - Besi (pickaxe wood ok), Perak (butuh pickaxe iron), Emas (pickaxe silver), Kristal Langit (HARUS pickaxe diamond). Pickaxe diamond beli 5000 KE di Pengrajin Andi. Mob: Kelelawar Gua (HP 40, drop 'sayap kelelawar' material crafting). Trap: ada batu jatuh tiap 60 detik di terowongan utama - hindari grid berwarna merah (5 detik warning sebelum jatuh)."
+    },
+    {
+      "topic": "Puncak Vulkanik - Zona 4",
+      "tags": "vulkanik, lava, level 20-35, danger, boss naga",
+      "content": "Zona berbahaya. DPS lava 5/detik kalau injak. WAJIB pakai 'Sepatu Tahan Panas' (1500 KE di Bu Dewi level 2 reputation). Mob: Naga Lava Mini (HP 200, ATK 35, drop 'sisik api' material), Golem Batu (HP 350, ATK 25, drop 'hati golem' untuk crafting end-game). Boss: Naga Tua (HP 1500), spawn 30 menit, recommended 4 player. Drop boss: Pedang Api (DMG 80, fire damage +10), 2000 KE, kemungkinan kecil 'Telur Naga' (pet exotic). Tip: stay di platform tengah saat boss cast meteor, dodge ke pinggir saat tail swipe."
+    },
+    {
+      "topic": "Reruntuhan Kuno - Zona 5 End-Game",
+      "tags": "endgame, puzzle, level 35-50, raid, boss final",
+      "content": "Akses butuh complete quest 'Misteri Pulau' dari Pak Kapten (rangkaian 8 sub-quest). Puzzle 4 batu di pintu masuk - tekan urutan: utara, timur, selatan, barat. Sesuai jam matahari di patung lobby (lihat arah bayangan). Mob: Penjaga Kuno (HP 500), Ksatria Bayangan (HP 700, teleport tiap 10 detik). Boss final: Raja Pulau (HP 3000), 3 fase: (Fase 1: 100-66% HP) summon 4 minion + slash combo. (Fase 2: 66-33% HP) AoE laser cross, hindari di belakang pilar. (Fase 3: <33% HP) berserker mode, ATK +50%. Drop unik: Mahkota Raja (+50 stat semua), Title 'Penakluk Pulau'."
+    },
+    {
+      "topic": "Sistem Crafting",
+      "tags": "crafting, equipment, item, resep",
+      "content": "Pengrajin Andi di Pantai Spawn handle semua crafting. Resep dasar: Pedang Besi (5 besi + 100 KE), Armor Kulit (3 kulit babi + 50 KE), Pickaxe Diamond (3 emas + 1 kristal langit + 1000 KE). Resep langka unlock setelah complete quest tertentu - mis. 'Pedang Naga' butuh complete kill Naga Tua 5x + 10 sisik api. Tier equipment: Wood < Iron < Silver < Gold < Crystal < Lava < Ancient. Tiap tier kasih +10 ATK / +5 DEF dari tier sebelumnya. Crafting fail rate: 0% (selalu sukses), tapi material habis kalau resep salah."
+    },
+    {
+      "topic": "Currency dan Trading",
+      "tags": "ekonomi, trade, koin, robux",
+      "content": "Currency utama: Koin Emas (KE) didrop dari mob (5-50 KE/mob), quest reward, sell item ke NPC. Trading antar player: pakai NPC Pedagang Rahasia di lobby (cooldown 24 jam realtime per pair player). Auction House BELUM tersedia (planned v1.5). Item premium pakai Robux (R$): Pet Naga (199 R$), Skin Pedang Galaksi (399 R$), Sepatu Tahan Panas Premium (149 R$, alternatif yang KE). Game Pass 'VIP': 599 R$ kasih +20% drop rate, 2x EXP, akses lounge VIP."
+    },
+    {
+      "topic": "Sistem Level dan Stats",
+      "tags": "level, stat, exp, prestige",
+      "content": "EXP per kill mob: HP_mob/10 (kasar). Level cap saat ini: 50. Tiap naik level: +5 HP, +2 ATK, +1 DEF otomatis. Stat point manual: 3 poin per level, distribusi ke STR (ATK), AGI (movement+dodge), INT (magic damage). Reset stat di Bu Dewi: 500 KE per reset. Sistem prestige di level 50: reset ke level 1, dapat aura permanen +10% all stats per prestige (max 5x prestige = +50%). Recommended buat farm zona 1-3 saat prestige reset karena stat awal lebih kuat."
+    },
+    {
+      "topic": "PvP Zone dan Aturan",
+      "tags": "pvp, arena, rules, ban",
+      "content": "PvP HANYA aktif di 2 lokasi: Arena PvP (clearing kecil di tengah Hutan Bambu) dan Reruntuhan Kuno. Zona lain pure PvE. Menyerang player di luar PvP zone -> auto-mute 5 menit + warning. 3x warning = ban 24 jam. Arena PvP free-for-all 1v1v1: spawn camping = ban 1 jam (deteksi otomatis: 3 kill di area spawn dalam 30 detik). Reward PvP: 10 KE per kill, +1 PvP rank. Top 10 PvP rank dapat title 'Ksatria Pulau' (gold name tag) reset weekly."
+    },
+    {
+      "topic": "Easter Eggs dan Rahasia",
+      "tags": "secret, easter egg, hidden, fun",
+      "content": "5 easter egg yang sudah ditemukan publik: (1) air terjun kecil di Pantai pojok timur = peti 100 KE, respawn 1 jam. (2) Loncat 10x di patung Pak Kapten (depan dock) = title 'Si Iseng' permanent. (3) Ketik /yantogila di chat saat berada di Gua Kristal = spawn Yanto NPC kasih hint random. (4) Urutan emote di puncak vulkanik (dance -> wave -> sit) = +500 EXP one-time per akun. (5) Telusuri terowongan tersembunyi di Reruntuhan Kuno (di balik patung kedua, ada celah sempit) = chest unik 'Topi Pak RT' (cosmetic). Masih ada 2 easter egg belum ditemukan - hadiah 50.000 KE bagi yang temukan dan kirim screenshot ke admin."
+    },
+    {
+      "topic": "Update Terbaru v1.4 Mei 2026",
+      "tags": "update, changelog, terbaru, patch",
+      "content": "v1.4 changes (rilis 1 Mei 2026): (1) Naga Tua HP dikurangi 1700 -> 1500 untuk solo run yang skilled. (2) Tambah quest harian 'Patrol Pulau' di Pak Kapten (hadiah 300 KE/hari, max 1x/hari). (3) Bug fix: pickaxe diamond tidak break lagi saat mining kristal langit (sebelumnya 5% chance break). (4) Tambah skin baru 'Yanto Edition' di shop Robux (199 R$). (5) PvP ranking system rework - decay -1 rank per hari kalau tidak main. Next update v1.5 (target Juli 2026): Auction House full feature + zona keenam 'Bawah Laut' + 5 raid boss baru."
+    },
+    {
+      "topic": "Bug Report dan Support",
+      "tags": "bug, report, support, kontak",
+      "content": "Lapor bug di channel #bug-report Discord. Format wajib: [Tanggal][Lokasi/Zona][Deskripsi singkat][Screenshot atau video]. Bug serius (exploit, dupe item, crash server) PM langsung admin @YantoCreator atau @ModSenior. JANGAN ekspos exploit di public chat -> auto-ban 7 hari + log review. Compensation policy: kalau item hilang karena bug konfirmasi log, restore dalam 48 jam. Kalau hilang karena player error (mis. salah trade), tidak di-restore. Server status check: ketik /status di channel #bot-test."
+    },
+    {
+      "topic": "FAQ Pertanyaan Umum",
+      "tags": "faq, pertanyaan umum, info dasar",
+      "content": "Q: Map gratis? A: Iya, 100% gratis di Roblox. Item premium opsional pakai Robux. Q: Kapan reset map? A: TIDAK ADA reset, progress permanen kecuali player sendiri yang prestige. Q: Crossplay? A: Iya, support PC + Mobile + Console (Xbox). Q: Max player per server? A: 12 player. Q: Cara private server? A: Beli VIP server 100 R$ di game page Roblox. Q: Trade scam dilindungi? A: Hanya kalau pakai NPC trade. Trade lewat chat = risk sendiri (banyak scammer, jangan percaya). Q: Bot Discord 'yanto' siapa? A: AI assistant resmi server, jawab pertanyaan map. Mention 'yanto' di channel #tanya-yanto."
+    },
+    {
+      "topic": "Tips dan Strategi Awal Main",
+      "tags": "tips, strategi, beginner, level 1-10",
+      "content": "Tips untuk player baru (level 1-10): (1) Beli peta Pantai dari Pak Kapten dulu (50 KE) - saving waktu navigasi. (2) Farm Babi Hutan di Hutan Bambu - HP rendah, drop konsisten, EXP/jam paling tinggi di awal. (3) Selalu standby dekat Bu Dewi saat HP <50% - heal gratis. (4) JANGAN langsung ke Gua Kristal sebelum level 12 - mob terlalu tough. (5) Save 2000 KE pertama buat beli Pickaxe Iron - upgrade penting buat farm Perak. (6) Quest 'Cari Daun Bambu' adalah daily-friendly (max 1x/hari) - jadwalkan rutin. (7) Hindari Arena PvP sampai level 15 minimal - PvP gear matters."
+    }
+  ],
+  "chat_history": []
+}

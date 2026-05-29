@@ -183,3 +183,37 @@ Repo ini punya 3 workflow di `.github/workflows/`:
 - Centang "Allow GitHub Actions to create and approve pull requests"
 
 Tanpa setting ini, workflow gagal push ke main (403 forbidden).
+
+
+
+## Bahasa Jawaban (Multilingual)
+
+Gemini natively multilingual - **TIDAK** ada deteksi bahasa di Node side.
+Kalau user tanya pakai bahasa Indonesia, English, Portugis, atau bahasa
+lain, Gemini paham & jawab natural di bahasa yang sama. Persona
+mengandung instruksi soft *"ikuti bahasa user"* untuk memastikan.
+
+Boilerplate (`hello`, `back`, `farewell`, `sabar`, `warn`, `timeout`,
+`empty`, `errorApi`, `apiFail`) selalu Indonesia karena itu pesan sistem
+khas komunitas (bukan jawaban AI).
+
+## Contoh Database Map Roblox
+
+Lihat `examples/sample-map-data.json` untuk contoh DB lengkap (15 entri,
+fictional map "Petualangan Pulau Yantoland"). Kategori entri yang
+disarankan untuk fundamental bot:
+
+1. **Tentang Map** - overview umum (mode, tema, max player, durasi)
+2. **Per-Zona** - 1 entry per zona/area (mob, NPC, drop, akses)
+3. **Sistem Crafting** - resep, tier equipment
+4. **Currency & Trading** - cara dapat koin, trade rules
+5. **Sistem Level & Stats** - level cap, stat distribution, prestige
+6. **PvP Zone & Aturan** - lokasi PvP, ban rules
+7. **Easter Eggs & Rahasia** - hidden content
+8. **Update Changelog** - perubahan terbaru
+9. **Bug Report & Support** - cara lapor, kontak admin
+10. **FAQ** - pertanyaan umum
+11. **Tips & Strategi** - panduan player baru
+
+Cara import: Dashboard -> tab **Backup DB** -> Import -> upload JSON ->
+mode `replace` (kalau DB kosong) atau `merge` (kalau mau tambah).

@@ -9,7 +9,6 @@ const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
 const runtime = require('./utils/runtimeEnv');
-const { detectLang } = require('./ai/lang');
 const { bus } = require('./utils/hotReload');
 
 // ---- konstanta path ----
@@ -331,7 +330,6 @@ bus.on('shutdown',   () => gracefulShutdown('tombol matikan bot'));
 async function processQuestion(question, msg, opts = {}) {
   const { allowReserve = false, isDeferred = false } = opts;
   const cfg = loadCfg();
-  const lang = detectLang(question);  // hanya untuk instruksi prompt AI
 
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
   const hit = cache.findSimilar(question, cfg.cache.similarityThreshold);
@@ -342,11 +340,12 @@ async function processQuestion(question, msg, opts = {}) {
     return;
   }
 
+  // Gemini multilingual natively -- TIDAK perlu deteksi bahasa di sini.
+  // Persona sudah berisi instruksi "ikuti bahasa user".
   const { buildSystemPrompt } = loadPersonality();
   const mapCtx = mapData.buildContext(question);
   const sysPrompt = buildSystemPrompt({
     name: botName(),
-    lang,
     mapContext: mapCtx,
     extraNote: followUp
       ? 'User minta jawaban LEBIH DETAIL/SPESIFIK dari sebelumnya. Tambahkan rincian relevan dari DATA MAP.'
@@ -373,7 +372,7 @@ async function processQuestion(question, msg, opts = {}) {
       userId: msg.author.id,
       question,
       answer,
-      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}${lang !== 'id' ? `+${lang}` : ''}`,
+      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}`,
     });
   }
   await sendLong(msg, answer);
