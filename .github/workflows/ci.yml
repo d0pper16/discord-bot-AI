@@ -55,7 +55,6 @@ jobs:
             "src/bot.js"
             "src/ai/gemini.js"
             "src/ai/personality.js"
-            "src/ai/lang.js"
             "src/db/database.js"
             "src/db/mapData.js"
             "src/db/chatHistory.js"
@@ -67,6 +66,7 @@ jobs:
             "src/utils/logger.js"
             "src/utils/hotReload.js"
             "src/utils/runtimeEnv.js"
+            "examples/sample-map-data.json"
           )
           missing=0
           for f in "${required[@]}"; do
@@ -76,6 +76,18 @@ jobs:
             fi
           done
           exit $missing
+
+      - name: Validate sample DB JSON
+        run: |
+          node -e "
+            const j = JSON.parse(require('fs').readFileSync('examples/sample-map-data.json','utf8'));
+            if (!Array.isArray(j.map_data)) { console.error('map_data harus array'); process.exit(1); }
+            if (j.map_data.length < 1) { console.error('map_data kosong'); process.exit(1); }
+            for (const m of j.map_data) {
+              if (!m.topic || !m.content) { console.error('entry harus punya topic + content'); process.exit(1); }
+            }
+            console.log('sample-map-data.json OK ('+j.map_data.length+' entries)');
+          "
 
       - name: Verify package.json deps
         run: |
