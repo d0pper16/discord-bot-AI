@@ -1,0 +1,92 @@
+name: CI
+
+# Cek syntax & validasi struktur tiap push & PR.
+
+on:
+  push:
+    branches:
+      - feat/yanto-bot
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax check all .js files
+        run: |
+          set -e
+          FAILED=0
+          while IFS= read -r f; do
+            if ! node --check "$f"; then
+              echo "::error file=$f::syntax error"
+              FAILED=1
+            fi
+          done < <(find . -type f -name "*.js" \
+                   -not -path "./node_modules/*" \
+                   -not -path "./.git/*" \
+                   -not -path "./data/*")
+          exit $FAILED
+
+      - name: Validate JSON files
+        run: |
+          set -e
+          for f in config.json package.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8')); console.log('OK: $f')"
+          done
+
+      - name: Verify required files exist
+        run: |
+          set -e
+          required=(
+            "package.json"
+            "config.json"
+            "runner.js"
+            ".env.example"
+            "src/index.js"
+            "src/bot.js"
+            "src/ai/gemini.js"
+            "src/ai/personality.js"
+            "src/ai/lang.js"
+            "src/db/database.js"
+            "src/db/mapData.js"
+            "src/db/chatHistory.js"
+            "src/db/audit.js"
+            "src/dashboard/server.js"
+            "src/dashboard/public/index.html"
+            "src/dashboard/public/app.js"
+            "src/dashboard/public/style.css"
+            "src/utils/logger.js"
+            "src/utils/hotReload.js"
+            "src/utils/runtimeEnv.js"
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::missing required file"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Verify package.json deps
+        run: |
+          node -e "
+            const p = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+            const must = ['@google/generative-ai','better-sqlite3','chokidar','discord.js','dotenv','express','express-basic-auth','multer'];
+            for (const m of must) {
+              if (!p.dependencies || !p.dependencies[m]) {
+                console.error('Missing dependency: ' + m);
+                process.exit(1);
+              }
+            }
+            console.log('package.json deps OK');
+          "

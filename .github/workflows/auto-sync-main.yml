@@ -1,0 +1,51 @@
+name: Auto-sync main with feat/yanto-bot
+
+# Setiap push ke feat/yanto-bot, fast-forward main supaya production tetap up-to-date.
+# Skip auto-sync dengan menambahkan "[skip sync]" di pesan commit.
+
+on:
+  push:
+    branches:
+      - feat/yanto-bot
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-sync-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip sync]') }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch feat/yanto-bot
+        run: git fetch origin feat/yanto-bot
+
+      - name: Fast-forward main
+        run: |
+          set -e
+          echo "main HEAD before: $(git rev-parse HEAD)"
+          echo "feat/yanto-bot HEAD: $(git rev-parse origin/feat/yanto-bot)"
+          if git merge-base --is-ancestor HEAD origin/feat/yanto-bot; then
+            git merge --ff-only origin/feat/yanto-bot
+            echo "main HEAD after : $(git rev-parse HEAD)"
+            git push origin main
+            echo "::notice::main berhasil di-fast-forward ke $(git rev-parse --short HEAD)"
+          else
+            echo "::warning::main BUKAN ancestor dari feat/yanto-bot - history divergent. Auto-sync di-skip."
+            exit 1
+          fi

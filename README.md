@@ -144,3 +144,42 @@ Poll 2s. Disk: hanya update DOM kalau perubahan >= 1% dari kapasitas total (req.
 - CPU process %
 - Disk %
 - Gemini API usage 2 key + indikator key aktif
+
+
+
+## Auto-sync ke main (GitHub Actions)
+
+Repo ini punya 3 workflow di `.github/workflows/`:
+
+### 1. `auto-sync-main.yml`
+- Trigger: setiap push ke `feat/yanto-bot`.
+- Aksi: fast-forward `main` ke HEAD `feat/yanto-bot` lalu push `main` otomatis.
+- Hanya jalan kalau `main` adalah ancestor dari `feat/yanto-bot` (linear history).
+- Skip kalau pesan commit mengandung `[skip sync]`.
+
+### 2. `ci.yml`
+- Trigger: setiap push ke `feat/yanto-bot` / `main`, dan setiap PR ke `main`.
+- Aksi: `node --check` semua `.js`, validasi JSON, verifikasi file core, verifikasi dependency.
+
+### 3. `auto-pr.yml`
+- Trigger: push ke `feat/yanto-bot` dengan pesan commit mengandung `[skip sync]`.
+- Aksi: bikin PR otomatis ke `main` (kalau belum ada).
+
+### Workflow ke depan
+
+```
+1. Edit kode (lokal / dashboard / git)
+2. Commit + push ke feat/yanto-bot
+3. GitHub Actions otomatis:
+   a. CI run (syntax check)
+   b. Auto-fast-forward main -> production langsung up-to-date
+4. Selesai.
+```
+
+### Setup Permission Actions (sekali aja)
+
+**Settings -> Actions -> General -> Workflow permissions**:
+- Pilih "Read and write permissions"
+- Centang "Allow GitHub Actions to create and approve pull requests"
+
+Tanpa setting ini, workflow gagal push ke main (403 forbidden).
