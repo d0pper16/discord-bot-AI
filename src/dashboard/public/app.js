@@ -726,6 +726,52 @@ setInterval(() => refreshRoblox(false), 60000);  // 1 menit, match server-side t
 loadRobloxConfig();
 refreshRoblox(true);
 
+// =================================================================
+//  Discord Presence Mode Config
+// =================================================================
+async function loadPresenceConfig() {
+  try {
+    const r = await fetch('/api/presence-config').then(r => r.json());
+    const mode = r.mode || 'custom';
+    const radioMap = { custom: 'pres-mode-custom', streaming: 'pres-mode-streaming', richpresence: 'pres-mode-richpresence' };
+    const radioId = radioMap[mode] || 'pres-mode-custom';
+    const el = document.getElementById(radioId);
+    if (el) el.checked = true;
+    $('#pres-twitch-url').value = r.twitchUrl || '';
+    const statusEl = $('#pres-richpresence-status');
+    if (statusEl) {
+      if (r.appIdConfigured) {
+        statusEl.style.color = 'var(--success)';
+        statusEl.textContent = '[DISCORD_APP_ID terdeteksi - siap pakai]';
+      } else {
+        statusEl.style.color = 'var(--text-dim)';
+        statusEl.textContent = '[butuh DISCORD_APP_ID di .env - lihat tutorial di bawah]';
+      }
+    }
+  } catch (e) { console.error(e); }
+}
+$('#pres-reload').onclick = loadPresenceConfig;
+$('#pres-save').onclick = async () => {
+  if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
+  const checked = document.querySelector('input[name="presence-mode"]:checked');
+  const mode = checked ? checked.value : 'custom';
+  const twitchUrl = $('#pres-twitch-url').value.trim();
+  if (mode === 'streaming' && twitchUrl &&
+      !/^https:\/\/(www\.)?(twitch\.tv|youtube\.com|youtu\.be)\//i.test(twitchUrl)) {
+    alert('Mode Streaming butuh URL valid:\nhttps://www.twitch.tv/...\nhttps://www.youtube.com/...\n\nDiscord cuma izinkan domain itu.');
+    return;
+  }
+  const ok = await jsonWrite('PUT', '/api/presence-config',
+    { mode, twitchUrl },
+    `Yakin set presence mode = "${mode}"? Bot akan auto-update activity dalam 1 menit.`);
+  if (ok) {
+    const d = await ok.json();
+    alert(`Presence mode tersimpan: ${d.mode}.\n\nTunggu ~1 menit untuk lihat efek di Discord profile bot,\natau restart bot supaya langsung berubah.`);
+    loadPresenceConfig();
+  }
+};
+loadPresenceConfig();
+
 // Pause polling saat tab browser tidak aktif (hemat CPU/bandwidth/battery).
 // Resume + fetch sekali saat tab kembali visible.
 document.addEventListener('visibilitychange', () => {

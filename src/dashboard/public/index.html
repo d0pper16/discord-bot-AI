@@ -117,6 +117,115 @@
     <div id="rb-status" class="metrics-grid"></div>
     <p class="hint" id="rb-error" style="color:var(--danger);margin-top:8px" hidden></p>
   </div>
+
+  <div class="card writer">
+    <h3>Discord Rich Presence Mode</h3>
+    <p class="hint">
+      Pilih cara bot menampilkan info map di profile Discord-nya:
+    </p>
+
+    <label class="row" style="align-items:flex-start;gap:8px;margin-bottom:8px">
+      <input type="radio" name="presence-mode" id="pres-mode-custom" value="custom" style="width:auto;margin-top:3px">
+      <span>
+        <b>Custom Status</b> <small style="color:var(--success)">[default - jalan tanpa setup]</small>
+        <br><small>Tampil 1 baris: <code>👁️ Watching &lt;Map&gt; | 1.4K Active | 2.1M Visit | 510 fav</code>. Reliable di semua client.</small>
+      </span>
+    </label>
+
+    <label class="row" style="align-items:flex-start;gap:8px;margin-bottom:8px">
+      <input type="radio" name="presence-mode" id="pres-mode-streaming" value="streaming" style="width:auto;margin-top:3px">
+      <span>
+        <b>Streaming (link clickable)</b> <small style="color:var(--accent)">[butuh URL Twitch/YouTube]</small>
+        <br><small>Tampil "Live" badge dengan judul map clickable. Discord WAJIB URL Twitch/YouTube saja.</small>
+      </span>
+    </label>
+    <label style="margin-left:24px">
+      Twitch/YouTube URL (untuk mode streaming)
+      <input id="pres-twitch-url" type="url" placeholder="https://www.twitch.tv/yantobot" class="writer-input">
+      <small>Default: <code>https://www.twitch.tv/yantobot</code>. Discord cuma izinkan domain twitch.tv / youtube.com / youtu.be.</small>
+    </label>
+
+    <label class="row" style="align-items:flex-start;gap:8px;margin-bottom:8px">
+      <input type="radio" name="presence-mode" id="pres-mode-richpresence" value="richpresence" style="width:auto;margin-top:3px">
+      <span>
+        <b>Rich Presence (image asset)</b>
+        <small id="pres-richpresence-status" style="color:var(--text-dim)">[butuh DISCORD_APP_ID di .env]</small>
+        <br><small>Tampil dengan icon map besar + thumbnail kotak + tombol "Play on Roblox". Hanya tampil di Discord client modern.</small>
+      </span>
+    </label>
+
+    <div class="row">
+      <button id="pres-save" class="writer">Simpan Mode Presence</button>
+      <button id="pres-reload" class="secondary">Muat Ulang</button>
+    </div>
+
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:var(--accent)">📚 Tutorial setup Rich Presence (Discord Developer Portal)</summary>
+      <div class="hint" style="margin-top:8px;line-height:1.6">
+        <b>Langkah-langkah aktifkan Rich Presence dengan image asset:</b>
+        <ol>
+          <li>Buka <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a></li>
+          <li>Pilih aplikasi bot kamu (atau klik <b>New Application</b> kalau belum ada)</li>
+          <li>Tab <b>General Information</b> → copy <b>Application ID</b></li>
+          <li>SSH ke VPS, edit <code>.env</code>:
+            <pre>nano ~/discord-bot-AI/.env
+# tambahkan:
+DISCORD_APP_ID=&lt;app_id_yang_kamu_copy&gt;</pre>
+          </li>
+          <li>(Opsional) Upload asset image untuk fallback:
+            <ul>
+              <li>Tab <b>Rich Presence → Art Assets</b> di Developer Portal</li>
+              <li>Klik <b>Add Image(s)</b></li>
+              <li>Upload 2 image:
+                <ul>
+                  <li>Asset key: <code>roblox-banner</code> (image rectangular 1024×1024 max, banner default)</li>
+                  <li>Asset key: <code>roblox-icon</code> (image square 512×512, icon kecil default)</li>
+                </ul>
+              </li>
+              <li>Save (Discord proses ~10 menit)</li>
+            </ul>
+          </li>
+          <li>Restart bot: <code>pm2 restart yanto</code></li>
+          <li>Pilih radio <b>Rich Presence (image asset)</b> di atas → Simpan</li>
+        </ol>
+
+        <b>Yang akan tampil di Discord:</b>
+        <pre>┌──────────────────────────────────────┐
+│ 🎮 yanto                          APP│
+│                                       │
+│  ┌────────┐  Watching &lt;Map Name&gt;     │  ← name (besar)
+│  │ banner │  1.4K Active | 2.1M Visit │  ← details
+│  │ image  │  roblox.com/games/&lt;id&gt;    │  ← state
+│  └────────┘                           │
+│                                       │
+│         ┌─────────────────┐           │
+│         │ Play on Roblox  │ ← button  │
+│         └─────────────────┘           │
+└──────────────────────────────────────┘</pre>
+
+        <b>Catatan penting:</b>
+        <ul>
+          <li>Bot biasa <b>tidak selalu</b> render rich presence asset penuh — fitur itu native untuk RPC client (mis. Steam, Roblox client). Kalau gagal render, fallback ke "Watching &lt;Map&gt;" biasa.</li>
+          <li>Asset key (<code>roblox-banner</code> / <code>roblox-icon</code>) harus persis sama dengan yang di-upload di Developer Portal.</li>
+          <li>Discord cache asset ~10 menit. Setelah upload, tunggu sebentar baru terlihat efeknya.</li>
+          <li>Untuk dynamic image dari URL (bukan asset key), pakai field <code>largeImageURL</code> — tapi support-nya tergantung versi discord.js.</li>
+        </ul>
+
+        <b>Tutorial setup Streaming Mode:</b>
+        <ol>
+          <li>Pilih radio <b>Streaming (link clickable)</b></li>
+          <li>Isi field URL dengan format Twitch/YouTube. Tidak harus ada channel asli — Discord cuma validasi domain pattern. Contoh:
+            <ul>
+              <li><code>https://www.twitch.tv/yantobot</code> (default kalau dikosongin)</li>
+              <li><code>https://www.youtube.com/@channelkamu</code></li>
+            </ul>
+          </li>
+          <li>Save → bot di Discord akan tampil dengan badge merah "LIVE" + judul "&lt;Map&gt; | 1.4K Active..." yang clickable buka URL kamu</li>
+          <li>Kalau mau redirect ke roblox.com, kamu bisa setup channel Twitch yg deskripsinya berisi link Roblox kamu, atau pakai mode <b>custom</b> (1 baris emoji tanpa link).</li>
+        </ol>
+      </div>
+    </details>
+  </div>
 </section>
 
 <!-- ====== CONNECTION ====== -->

@@ -929,30 +929,81 @@ async function updatePresence() {
 
     // Rich fields: name (utama), details (detail), state (fallback).
     //
-    // Discord client render rules untuk USER BOT:
-    //   - Tipe Watching/Playing/Listening + tanpa app cover -> hanya "name"
-    //     yang tampil. details/state biasanya diabaikan.
-    //   - Tipe Custom + state -> baris itu yang tampil (tanpa prefix).
-    //
-    // Untuk multi-line "Watching <Map>\n1.4K Active..." kita pakai
-    // ActivityType.Custom dengan state berisi gabungan (yang KEPASTIAN
-    // tampil) PLUS Watching activity sebagai backup di emoji line.
+    // Mode presence dari config.json -> presence.mode:
+    //   "custom"       (DEFAULT)  -> ActivityType.Custom (1 baris emoji + map + stats KMB)
+    //                                 Universal, jalan tanpa setup.
+    //   "streaming"               -> ActivityType.Streaming (link clickable ke roblox.com)
+    //                                 Discord render "Live on Twitch/YouTube" + URL clickable.
+    //                                 Butuh URL valid (Twitch/YouTube) -- kita pakai twitchUrl
+    //                                 dari config (default twitch.tv/yantobot).
+    //   "richpresence"            -> ActivityType.Watching dengan assets image dari
+    //                                 Discord Developer Portal. Butuh APPLICATION_ID
+    //                                 + asset key uploaded.
+    //                                 Image diambil dari Roblox icon URL & dipakai
+    //                                 sebagai large_image (kalau di-allow CDN proxy).
+
+    const cfg = loadCfg();
+    const mode = (cfg.presence && cfg.presence.mode) || 'custom';
     const mapName = wstate.name || 'Roblox';
     const active  = wstate.playing != null ? fmtKMB(wstate.playing)   : '...';
     const visits  = wstate.visits  != null ? fmtKMB(wstate.visits)    : '...';
     const fav     = wstate.favorited != null ? fmtKMB(wstate.favorited) : '...';
     const detailLine = `${active} Active | ${visits} Visit | ${fav} fav`;
+    const placeUrl = wstate.rootPlaceId ? `https://www.roblox.com/games/${wstate.rootPlaceId}` : null;
 
-    // ActivityType.Custom -> "state" yang ditampilkan tanpa prefix
-    // (mendukung emoji + 128 char). Tipe ini PALING reliable utk bot biasa.
-    await client.user.setPresence({
-      status: 'online',
-      activities: [{
-        type: ActivityType.Custom,
-        name: 'custom-status',                                  // wajib ada, gak ditampilkan
-        state: `\uD83D\uDC41\uFE0F Watching ${mapName} | ${detailLine}`,  // 👁️ Watching <Map> | 1.4K Active...
-      }],
-    });
+    if (mode === 'streaming' && placeUrl) {
+      // ActivityType.Streaming -> URL clickable di Discord client.
+      // Discord requires URL match Twitch/YouTube domain pattern,
+      // tapi kita pakai twitchUrl shim supaya link clickable; baris kedua
+      // (state) tampil sebagai stats.
+      const shimUrl = (cfg.presence && cfg.presence.twitchUrl)
+                   || 'https://www.twitch.tv/yantobot';
+      await client.user.setPresence({
+        status: 'online',
+        activities: [{
+          type: ActivityType.Streaming,
+          name: `${mapName} | ${detailLine}`,
+          url: shimUrl,                                  // Twitch/YouTube URL = "Live" badge
+          state: `Klik judul utk buka map: ${placeUrl}`, // info backup
+        }],
+      });
+    } else if (mode === 'richpresence' && process.env.DISCORD_APP_ID) {
+      // ActivityType.Watching + assets (butuh DISCORD_APP_ID di .env).
+      // Asset key 'roblox-logo' harus di-upload manual via Developer Portal.
+      // Catatan: bot biasa belum tentu render large_image -- itu fitur RPC
+      // game IPC. Tapi kita kirim utk forward-compat.
+      await client.user.setPresence({
+        status: 'online',
+        activities: [{
+          type: ActivityType.Watching,
+          name: mapName,
+          details: detailLine,
+          state: placeUrl ? `roblox.com/games/${wstate.rootPlaceId}` : '',
+          applicationId: process.env.DISCORD_APP_ID,
+          assets: {
+            largeImageURL: wstate.thumbnailUrl || undefined,  // banner map
+            largeImageKey: 'roblox-banner',                   // fallback ke uploaded asset
+            largeImageText: mapName,
+            smallImageURL: wstate.iconUrl || undefined,       // icon kotak map
+            smallImageKey: 'roblox-icon',
+            smallImageText: `${active} active players`,
+          },
+          timestamps: { start: wstate.startedAt || Date.now() },
+          buttons: placeUrl ? [{ label: 'Play on Roblox', url: placeUrl }] : undefined,
+        }],
+      });
+    } else {
+      // DEFAULT: ActivityType.Custom (1 baris emoji + map + stats)
+      // Paling reliable untuk bot biasa, tampil di semua Discord client.
+      await client.user.setPresence({
+        status: 'online',
+        activities: [{
+          type: ActivityType.Custom,
+          name: 'custom-status',
+          state: `\uD83D\uDC41\uFE0F Watching ${mapName} | ${detailLine}`,
+        }],
+      });
+    }
   } catch (err) {
     log.warn('[presence] update error:', err.message);
   }

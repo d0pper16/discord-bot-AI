@@ -12,6 +12,7 @@ const OVERRIDABLE = [
   'GEMINI_API_KEY_3',
   'GEMINI_API_KEY_4',
   'GEMINI_API_KEY_5',
+  'DISCORD_APP_ID',
   // Backward-compat (auto-mapped saat load):
   'GEMINI_API_KEY_PRIMARY',
   'GEMINI_API_KEY_SECONDARY',

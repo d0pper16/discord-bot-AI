@@ -586,6 +586,21 @@ function start() {
     }
   });
 
+  // ----------- Discord Presence config (mode + URL streaming) -----------
+  app.get('/api/presence-config', (_req, res) => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      const p = cfg.presence || {};
+      res.json({
+        mode: p.mode || 'custom',
+        twitchUrl: p.twitchUrl || '',
+        appIdConfigured: !!process.env.DISCORD_APP_ID,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // =================================================================
   //  DB Backup -- dua-tabel-terpisah (req. user: format berbeda per tabel)
   //
@@ -775,6 +790,38 @@ function start() {
         universeId ? `universeId=${universeId}` : 'disabled');
       log.info(`[dashboard] roblox universe ID diperbarui oleh ${req.auth.user}: "${universeId}"`);
       res.json({ ok: true, universeId, status: robloxWatcher.getStatus() });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ----------- Discord Presence config: mode + URL streaming -----------
+  app.put('/api/presence-config', requireDev, requireConfirm, (req, res) => {
+    let { mode, twitchUrl } = req.body || {};
+    mode = String(mode || 'custom').toLowerCase();
+    if (!['custom', 'streaming', 'richpresence'].includes(mode)) {
+      return res.status(400).json({ error: 'mode harus: custom, streaming, atau richpresence' });
+    }
+    twitchUrl = String(twitchUrl || '').trim();
+    if (twitchUrl && !/^https:\/\/(www\.)?(twitch\.tv|youtube\.com|youtu\.be)\//i.test(twitchUrl)) {
+      return res.status(400).json({
+        error: 'twitchUrl harus URL https://twitch.tv/... atau https://youtube.com/... (Discord rule)',
+      });
+    }
+    if (mode === 'richpresence' && !process.env.DISCORD_APP_ID) {
+      return res.status(400).json({
+        error: 'Mode richpresence butuh DISCORD_APP_ID di .env. Set Discord Application ID dulu.',
+      });
+    }
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      cfg.presence = cfg.presence || {};
+      cfg.presence.mode = mode;
+      cfg.presence.twitchUrl = twitchUrl;
+      atomicWriteFile(CONFIG_FILE, Buffer.from(JSON.stringify(cfg, null, 2), 'utf8'));
+      audit.log(req.auth.user, 'presence.config.save', 'config.json', `mode=${mode}`);
+      log.info(`[dashboard] presence mode = ${mode} (oleh ${req.auth.user})`);
+      res.json({ ok: true, mode, twitchUrl });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

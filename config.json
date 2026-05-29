@@ -5,6 +5,10 @@
   "roblox": {
     "universeId": ""
   },
+  "presence": {
+    "mode": "custom",
+    "twitchUrl": ""
+  },
   "cache": {
     "similarityThreshold": 0.82,
     "specificTriggers": [
