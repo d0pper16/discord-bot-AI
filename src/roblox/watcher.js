@@ -19,17 +19,23 @@ const log = require('../utils/logger');
 const PLAYER_INTERVAL_MS = 60 * 1000;          // 1 menit
 const VISITS_INTERVAL_MS = 60 * 60 * 1000;     // 1 jam
 const ROBLOX_API = (id) => `https://games.roblox.com/v1/games?universeIds=${encodeURIComponent(id)}`;
+const ROBLOX_ICON_API = (id) => `https://thumbnails.roblox.com/v1/games/icons?universeIds=${encodeURIComponent(id)}&size=512x512&format=Png&isCircular=false`;
+const ROBLOX_THUMB_API = (id) => `https://thumbnails.roblox.com/v1/games/multiget/thumbnails?universeIds=${encodeURIComponent(id)}&size=768x432&countPerUniverse=1&defaults=true&format=Png`;
 
 const initialState = () => ({
   enabled: false,
   universeId: null,
   name: null,
   rootPlaceId: null,
+  description: null,
   playing: null,
   visits: null,
   favorited: null,
+  iconUrl: null,
+  thumbnailUrl: null,
   lastPlayingUpdate: 0,
   lastVisitsUpdate: 0,
+  lastIconUpdate: 0,
   error: null,
   lastErrorAt: 0,
   startedAt: 0,
@@ -64,12 +70,42 @@ async function fetchGame(universeId) {
   return json.data[0];
 }
 
+async function fetchIcon(universeId) {
+  if (typeof fetch !== 'function') return null;
+  try {
+    const r = await fetch(ROBLOX_ICON_API(universeId), {
+      headers: { 'User-Agent': 'YantoBot/1.0', 'Accept': 'application/json' },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const item = j && Array.isArray(j.data) && j.data[0];
+    if (item && item.state === 'Completed' && item.imageUrl) return item.imageUrl;
+    return null;
+  } catch (_) { return null; }
+}
+
+async function fetchThumbnail(universeId) {
+  if (typeof fetch !== 'function') return null;
+  try {
+    const r = await fetch(ROBLOX_THUMB_API(universeId), {
+      headers: { 'User-Agent': 'YantoBot/1.0', 'Accept': 'application/json' },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const item = j && Array.isArray(j.data) && j.data[0];
+    const t = item && Array.isArray(item.thumbnails) && item.thumbnails[0];
+    if (t && t.state === 'Completed' && t.imageUrl) return t.imageUrl;
+    return null;
+  } catch (_) { return null; }
+}
+
 async function tickPlayer() {
   if (!state.enabled || !state.universeId) return;
   try {
     const d = await fetchGame(state.universeId);
     state.name           = d.name;
     state.rootPlaceId    = d.rootPlaceId;
+    state.description    = (d.description || '').slice(0, 500);
     state.playing        = typeof d.playing === 'number' ? d.playing : null;
     state.favorited      = typeof d.favoritedCount === 'number' ? d.favoritedCount : null;
     state.lastPlayingUpdate = Date.now();
@@ -91,6 +127,21 @@ async function tickVisits() {
     log.info(`[roblox] tick visits: ${(d.visits || 0).toLocaleString()} total visits`);
   } catch (_) {
     // error sudah di-log di tickPlayer
+  }
+  // Refresh icon + thumbnail bareng visits (jarang berubah)
+  try {
+    const [icon, thumb] = await Promise.all([
+      fetchIcon(state.universeId),
+      fetchThumbnail(state.universeId),
+    ]);
+    if (icon)  state.iconUrl = icon;
+    if (thumb) state.thumbnailUrl = thumb;
+    if (icon || thumb) {
+      state.lastIconUpdate = Date.now();
+      log.info(`[roblox] icon refreshed (icon=${!!icon}, thumb=${!!thumb})`);
+    }
+  } catch (e) {
+    log.warn(`[roblox] icon fetch error: ${e.message}`);
   }
 }
 

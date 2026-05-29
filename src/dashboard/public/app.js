@@ -582,6 +582,31 @@ function fmtAgo(ms) {
   if (s < 86400) return Math.floor(s / 3600) + ' jam lalu';
   return Math.floor(s / 86400) + ' hari lalu';
 }
+
+/**
+ * Format compact ala Indonesia:
+ *   142 -> "142", 1234 -> "1.2 rb", 5234123 -> "5.2 jt",
+ *   1234000000 -> "1.2 m", 999999 -> "999 rb"
+ */
+function fmtCompact(n) {
+  if (typeof n !== 'number' || isNaN(n)) return '...';
+  if (n < 1000) return String(n);
+  const units = [
+    { v: 1e12, s: 't'  },
+    { v: 1e9,  s: 'm'  },
+    { v: 1e6,  s: 'jt' },
+    { v: 1e3,  s: 'rb' },
+  ];
+  for (const u of units) {
+    if (n >= u.v) {
+      const x = n / u.v;
+      const str = x >= 100 ? Math.floor(x).toString()
+                : x.toFixed(1).replace(/\.0$/, '');
+      return str + ' ' + u.s;
+    }
+  }
+  return String(n);
+}
 async function refreshRoblox(force = false) {
   if (!force && !$('#tab-roblox').classList.contains('active')) return;
   try {
@@ -594,32 +619,59 @@ async function refreshRoblox(force = false) {
           <div style="color:var(--text-muted);font-size:13px">Universe ID belum diset. Isi field di atas dan klik "Simpan &amp; Mulai Watch".</div>
         </div>`;
       $('#rb-error').hidden = true;
+      $('#rb-header').hidden = true;
       return;
     }
-    const playerStr = s.playing != null ? s.playing.toLocaleString() : '...';
-    const visitsStr = s.visits  != null ? s.visits.toLocaleString()  : '...';
-    const favStr    = s.favorited != null ? s.favorited.toLocaleString() : '-';
+
+    // Header card with image + map name
+    const header = $('#rb-header');
+    if (header) {
+      header.hidden = false;
+      const placeUrl = s.rootPlaceId ? `https://www.roblox.com/games/${s.rootPlaceId}` : '#';
+      $('#rb-icon').src = s.iconUrl || '';
+      $('#rb-icon').alt = s.name || 'map';
+      $('#rb-icon').style.display = s.iconUrl ? '' : 'none';
+      $('#rb-icon-skel').style.display = s.iconUrl ? 'none' : '';
+      $('#rb-name').textContent = s.name || 'loading...';
+      $('#rb-name-link').href = placeUrl;
+      $('#rb-uid-display').textContent = s.universeId || '-';
+      $('#rb-uptime').textContent = fmtAgo(s.startedAt);
+      $('#rb-desc').textContent = s.description || '';
+      $('#rb-thumbnail').src = s.thumbnailUrl || '';
+      $('#rb-thumbnail').style.display = s.thumbnailUrl ? '' : 'none';
+    }
+
+    // Metrics: compact + raw
+    const playing = s.playing;
+    const visits  = s.visits;
+    const fav     = s.favorited;
     wrap.innerHTML = `
       <div class="metric-card">
-        <div class="metric-label">Map Name</div>
-        <div class="metric-value" style="font-size:18px">${esc(s.name || 'loading...')}</div>
-        <div class="metric-sub">Universe ID: <code>${esc(s.universeId)}</code></div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Players Online <span class="badge-active">live</span></div>
-        <div class="metric-value">${playerStr}</div>
-        <div class="metric-sub">update tiap 1 menit - terakhir: ${fmtAgo(s.lastPlayingUpdate)}</div>
+        <div class="metric-label">Current Players <span class="badge-active">live</span></div>
+        <div class="metric-value">${playing != null ? playing.toLocaleString() : '...'}</div>
+        <div class="metric-sub">${playing != null ? `<b>${esc(fmtCompact(playing))}</b> player online` : '-'} - update tiap 1 menit</div>
+        <div class="metric-sub">terakhir: ${fmtAgo(s.lastPlayingUpdate)}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Total Visits</div>
-        <div class="metric-value" style="font-size:24px">${visitsStr}</div>
-        <div class="metric-sub">update tiap 1 jam - terakhir: ${fmtAgo(s.lastVisitsUpdate)}</div>
+        <div class="metric-value" style="font-size:24px">${visits != null ? visits.toLocaleString() : '...'}</div>
+        <div class="metric-sub">${visits != null ? `<b>${esc(fmtCompact(visits))}</b> total visit` : '-'} - update tiap 1 jam</div>
+        <div class="metric-sub">terakhir: ${fmtAgo(s.lastVisitsUpdate)}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Favorited</div>
-        <div class="metric-value" style="font-size:22px">${favStr}</div>
-        <div class="metric-sub">started ${fmtAgo(s.startedAt)}</div>
+        <div class="metric-value" style="font-size:22px">${fav != null ? fav.toLocaleString() : '...'}</div>
+        <div class="metric-sub">${fav != null ? `<b>${esc(fmtCompact(fav))}</b> favorit` : '-'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Quick Status</div>
+        <div class="metric-value" style="font-size:14px;line-height:1.4">
+          current players: <b>${playing != null ? playing.toLocaleString() : '...'}</b><br>
+          total visits: ${visits != null ? `+${esc(fmtCompact(visits))}` : '...'}
+        </div>
+        <div class="metric-sub" style="margin-top:8px">summary card</div>
       </div>`;
+
     if (s.error) {
       $('#rb-error').textContent = `[${fmtAgo(s.lastErrorAt)}] ${s.error}`;
       $('#rb-error').hidden = false;

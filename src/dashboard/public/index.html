@@ -111,6 +111,20 @@
 
   <div class="card">
     <h3>Status</h3>
+
+    <div id="rb-header" class="rb-header" hidden>
+      <div class="rb-icon-wrap">
+        <img id="rb-icon" class="rb-icon-large" alt="map icon" referrerpolicy="no-referrer">
+        <div id="rb-icon-skel" class="rb-icon-skel"></div>
+      </div>
+      <div class="rb-info">
+        <h3 style="margin:0 0 6px"><a id="rb-name-link" href="#" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none" id="rb-name-anchor"><span id="rb-name">...</span></a></h3>
+        <p>Universe ID: <code id="rb-uid-display">-</code> &middot; Watcher started <span id="rb-uptime">-</span></p>
+        <p id="rb-desc" style="font-style:italic;max-height:60px;overflow:auto"></p>
+        <img id="rb-thumbnail" class="rb-thumbnail" alt="map banner" referrerpolicy="no-referrer">
+      </div>
+    </div>
+
     <div id="rb-status" class="metrics-grid"></div>
     <p class="hint" id="rb-error" style="color:var(--danger);margin-top:8px" hidden></p>
   </div>
