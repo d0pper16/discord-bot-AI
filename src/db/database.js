@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS api_usage (
   status     TEXT    NOT NULL DEFAULT 'ok'
 );
 CREATE INDEX IF NOT EXISTS idx_api_used ON api_usage(api_key_id, used_at);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user       TEXT    NOT NULL,
+  action     TEXT    NOT NULL,
+  target     TEXT    NOT NULL DEFAULT '',
+  details    TEXT    NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_user    ON audit_log(user);
 `);
 
 module.exports = db;

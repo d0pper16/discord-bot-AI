@@ -3,9 +3,28 @@ const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
 let ROLE = null;
-let BOUNDS = {};
 let CACHE_SIZE = 0;
 let CACHE_LIMIT = 102400;
+
+// =================================================================
+//  Theme toggle
+// =================================================================
+(function initTheme() {
+  const saved = localStorage.getItem('yantoTheme') || 'dark';
+  document.documentElement.dataset.theme = saved;
+  updateThemeIcon();
+})();
+function updateThemeIcon() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  $('#btn-theme').textContent = dark ? '\u263C' : '\u263D';
+  $('#btn-theme').title = dark ? 'Switch to light' : 'Switch to dark';
+}
+$('#btn-theme').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('yantoTheme', next);
+  updateThemeIcon();
+};
 
 // =================================================================
 //  Tabs
@@ -16,11 +35,12 @@ $$('nav.tabs button').forEach(btn => {
     $$('.tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     $('#tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'audit') loadAudit();
   });
 });
 
 // =================================================================
-//  Modal: Konfirmasi user/pass
+//  Modals
 // =================================================================
 function askConfirm(msg = 'Yakin melakukan perubahan? Isi ulang user & password dev.') {
   return new Promise((resolve) => {
@@ -33,7 +53,6 @@ function askConfirm(msg = 'Yakin melakukan perubahan? Isi ulang user & password 
     errEl.hidden = true;
     modal.hidden = false;
     setTimeout(() => userIn.focus(), 50);
-
     function close(result) {
       modal.hidden = true;
       $('#confirm-ok').onclick = null;
@@ -43,12 +62,8 @@ function askConfirm(msg = 'Yakin melakukan perubahan? Isi ulang user & password 
       resolve(result);
     }
     $('#confirm-ok').onclick = () => {
-      const u = userIn.value.trim();
-      const p = passIn.value;
-      if (!u || !p) {
-        errEl.textContent = 'Username dan password wajib diisi.';
-        errEl.hidden = false; return;
-      }
+      const u = userIn.value.trim(); const p = passIn.value;
+      if (!u || !p) { errEl.textContent = 'Username dan password wajib diisi.'; errEl.hidden = false; return; }
       close({ user: u, pass: p });
     };
     $('#confirm-cancel').onclick = () => close(null);
@@ -57,30 +72,20 @@ function askConfirm(msg = 'Yakin melakukan perubahan? Isi ulang user & password 
     passIn.onkeydown = onEnter;
   });
 }
-
-// =================================================================
-//  Modal: Yes/No
-// =================================================================
 function askYesNo(message, title = 'Konfirmasi') {
   return new Promise((resolve) => {
     $('#yn-title').textContent = title;
     $('#yn-msg').textContent = message;
-    const m = $('#yesno-modal');
-    m.hidden = false;
+    const m = $('#yesno-modal'); m.hidden = false;
     const close = (v) => { m.hidden = true; resolve(v); };
     $('#yn-yes').onclick = () => close(true);
     $('#yn-no').onclick  = () => close(false);
   });
 }
-
-// =================================================================
-//  Modal: Pilihan upload (typo guard / new)
-// =================================================================
 function askSuggestion({ message, options }) {
   return new Promise((resolve) => {
     $('#sg-msg').textContent = message;
-    const wrap = $('#sg-options');
-    wrap.innerHTML = '';
+    const wrap = $('#sg-options'); wrap.innerHTML = '';
     options.forEach(opt => {
       const btn = document.createElement('button');
       btn.textContent = opt.label;
@@ -93,10 +98,6 @@ function askSuggestion({ message, options }) {
     $('#suggest-modal').hidden = false;
   });
 }
-
-// =================================================================
-//  Busy overlay (untuk restart/shutdown)
-// =================================================================
 function showBusy(title, msg) {
   $('#busy-title').textContent = title;
   $('#busy-msg').textContent = msg || '';
@@ -105,7 +106,7 @@ function showBusy(title, msg) {
 function hideBusy() { $('#busy-overlay').hidden = true; }
 
 // =================================================================
-//  Helper: write request dgn konfirmasi
+//  Write helpers
 // =================================================================
 async function withConfirm(promptMsg, sender) {
   if (ROLE !== 'dev') {
@@ -135,7 +136,7 @@ function jsonWrite(method, url, payload, promptMsg) {
 }
 
 // =================================================================
-//  Bootstrap
+//  Bootstrap (role)
 // =================================================================
 async function bootstrap() {
   try {
@@ -146,6 +147,11 @@ async function bootstrap() {
       $$('.writer').forEach(el => el.classList.add('locked'));
       $$('.writer-input, .writer button, .writer input, .writer textarea, .writer select')
         .forEach(el => { el.disabled = true; });
+      // Khusus untuk Restart/Shutdown buttons di header (req 9: tetap terlihat tapi disabled)
+      $('#btn-restart').disabled = true;
+      $('#btn-shutdown').disabled = true;
+      $('#btn-restart').title  = 'Read-only: hanya akun dev yang bisa restart';
+      $('#btn-shutdown').title = 'Read-only: hanya akun dev yang bisa matikan bot';
     }
   } catch (e) { console.error('me err', e); }
 }
@@ -155,6 +161,7 @@ bootstrap();
 //  Header buttons: Restart / Shutdown
 // =================================================================
 $('#btn-restart').onclick = async () => {
+  if (ROLE !== 'dev') return;
   const ok = await jsonWrite('POST', '/api/restart', {},
     'Restart bot? Bot akan diam total selama ~3 detik lalu hidup lagi (TANPA pesan pamit). Setelah hidup, bot ucap "hoamm...".');
   if (!ok) return;
@@ -162,17 +169,16 @@ $('#btn-restart').onclick = async () => {
   pollForReady();
 };
 $('#btn-shutdown').onclick = async () => {
+  if (ROLE !== 'dev') return;
   const yes = await askYesNo(
-    'Yakin matikan bot SECARA TOTAL? Bot akan ucap pamit, lalu mati. Dashboard juga ikut mati. Untuk menghidupkan lagi, jalankan "npm start" di server.',
+    'Yakin matikan bot SECARA TOTAL? Bot ucap pamit, lalu mati. Dashboard juga ikut mati. Untuk menghidupkan lagi, jalankan "npm start" di server.',
     'Matikan Bot Total?'
   );
   if (!yes) return;
-  const ok = await jsonWrite('POST', '/api/shutdown', {},
-    'Konfirmasi terakhir: matikan bot.');
+  const ok = await jsonWrite('POST', '/api/shutdown', {}, 'Konfirmasi terakhir: matikan bot.');
   if (!ok) return;
-  showBusy('Bot sedang dimatikan...', 'Bot ucap pamit selama 5 detik lalu proses berakhir. Dashboard akan offline.');
+  showBusy('Bot sedang dimatikan...', 'Bot ucap pamit ~5 detik lalu proses berakhir. Dashboard akan offline.');
 };
-
 async function pollForReady() {
   const start = Date.now();
   const tick = async () => {
@@ -289,8 +295,7 @@ function renderHistory() {
 }
 function openHistoryEditor(r) {
   if (ROLE !== 'dev') return;
-  const box = $('#history-editor');
-  box.hidden = false;
+  const box = $('#history-editor'); box.hidden = false;
   $('#he-id').textContent = '#' + r.id;
   $('#he-question').value = r.question || '';
   $('#he-answer').value   = r.answer   || '';
@@ -338,11 +343,11 @@ loadPersonality();
 // =================================================================
 async function loadConfigFields() {
   const data = await fetch('/api/config-fields').then(r => r.json());
-  BOUNDS = data.bounds; CACHE_SIZE = data.cacheSizeBytes; CACHE_LIMIT = data.cacheLimitBytes;
+  CACHE_SIZE = data.cacheSizeBytes; CACHE_LIMIT = data.cacheLimitBytes;
   const v = data.values;
   $('#cfg-name').value     = v.name;
   $('#cfg-rpm').value      = v.rpmLimit;
-  $('#cfg-rpd').value      = v.rpdLimit;
+  $('#cfg-rpd').value      = v.rpdLimit;     // 995, disabled
   $('#cfg-cd').value       = v.cooldownSec;
   $('#cfg-reserve').value  = v.reserveTokens;
   $('#cfg-sim').value      = v.similarityThreshold;
@@ -365,7 +370,6 @@ async function saveConfig(force = false) {
   const payload = {
     name: $('#cfg-name').value.trim(),
     rpmLimit: Number($('#cfg-rpm').value),
-    rpdLimit: Number($('#cfg-rpd').value),
     cooldownSec: Number($('#cfg-cd').value),
     reserveTokens: Number($('#cfg-reserve').value),
     similarityThreshold: Number($('#cfg-sim').value),
@@ -376,7 +380,6 @@ async function saveConfig(force = false) {
   return jsonWrite('PUT', '/api/config-fields', payload,
     'Yakin simpan config bot? Beberapa field berlaku langsung tanpa restart.');
 }
-
 $('#config-save').onclick = async () => {
   const r = await saveConfig(false);
   if (!r) return;
@@ -385,7 +388,6 @@ $('#config-save').onclick = async () => {
     if (data.requiresForce) {
       const yes = await askYesNo(data.message, 'Cache > 100KB');
       if (!yes) { alert('Perubahan dibatalkan.'); return; }
-      // Re-submit dengan force=true (butuh konfirmasi user/pass lagi)
       const r2 = await saveConfig(true);
       if (!r2 || !r2.ok) return;
       const d = await r2.json();
@@ -407,21 +409,17 @@ loadConfigFields();
 // =================================================================
 //  FILE MANAGER
 // =================================================================
-let FILES = [];
 let CURRENT_FILE = null;
 
 async function loadFiles() {
   const data = await fetch('/api/files').then(r => r.json());
-  FILES = data.files;
   const tbody = $('#files-table tbody'); tbody.innerHTML = '';
-  FILES.forEach(f => {
+  data.files.forEach(f => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><code>${esc(f.path)}</code>${f.protected ? ' <span class="tag-protected" title="dilindungi: tidak bisa dihapus">protected</span>' : ''}</td>
       <td><small>${(f.size/1024).toFixed(2)} KB</small></td>
-      <td class="act">
-        <button class="secondary" data-open="${esc(f.path)}">Open</button>
-      </td>`;
+      <td class="act"><button class="secondary" data-open="${esc(f.path)}">Open</button></td>`;
     tr.querySelector('[data-open]').onclick = () => openFileEditor(f.path);
     tbody.appendChild(tr);
   });
@@ -457,12 +455,10 @@ $('#fe-delete').onclick = async () => {
   const yes = await askYesNo(`Hapus file ${CURRENT_FILE.path}? File yang sudah dihapus tidak bisa dikembalikan.`, 'Hapus File');
   if (!yes) return;
   const ok = await jsonWrite('DELETE', '/api/files/delete',
-    { path: CURRENT_FILE.path },
-    `Konfirmasi hapus ${CURRENT_FILE.path}.`);
+    { path: CURRENT_FILE.path }, `Konfirmasi hapus ${CURRENT_FILE.path}.`);
   if (ok) { $('#files-editor').hidden = true; CURRENT_FILE = null; loadFiles(); }
 };
 
-// New file
 $('#files-new').onclick = () => {
   $('#nf-path').value = ''; $('#nf-content').value = '';
   $('#newfile-modal').hidden = false;
@@ -474,8 +470,7 @@ $('#nf-create').onclick = async () => {
   if (!rel) { alert('Path wajib'); return; }
   $('#newfile-modal').hidden = true;
   const ok = await jsonWrite('POST', '/api/files/create',
-    { path: rel, content: $('#nf-content').value },
-    `Yakin buat file baru: ${rel}?`);
+    { path: rel, content: $('#nf-content').value }, `Yakin buat file baru: ${rel}?`);
   if (ok) {
     const d = await ok.json();
     alert(`File dibuat: ${d.path}`);
@@ -483,7 +478,6 @@ $('#nf-create').onclick = async () => {
   }
 };
 
-// Upload file (typo guard)
 $('#files-upload-btn').onclick = () => $('#files-upload-input').click();
 $('#files-upload-input').onchange = async (e) => {
   const file = e.target.files[0];
@@ -504,7 +498,6 @@ async function runUpload(file, dir, mode, targetPath) {
   fd.append('_confirm_user', creds.user);
   fd.append('_confirm_pass', creds.pass);
   const r = await fetch('/api/files/upload', { method: 'POST', body: fd });
-
   if (r.ok) {
     const d = await r.json();
     alert(`Upload ${d.mode}: ${d.path}${d.restarting ? ' (bot auto-restart)' : ''}`);
@@ -512,14 +505,11 @@ async function runUpload(file, dir, mode, targetPath) {
     loadFiles();
     return;
   }
-
   if (r.status === 409) {
     const data = await r.json();
     let options = [];
     if (data.status === 'exists') {
-      options = [
-        { label: `Update file existing (${data.targetPath})`, value: { mode: 'update', target_path: data.targetPath }, cls: 'danger' },
-      ];
+      options = [{ label: `Update file existing (${data.targetPath})`, value: { mode: 'update', target_path: data.targetPath }, cls: 'danger' }];
     } else if (data.status === 'ambiguous') {
       options = [
         ...data.suggestions.map(s => ({
@@ -530,22 +520,19 @@ async function runUpload(file, dir, mode, targetPath) {
         { label: `Tambah file baru: ${data.targetPath}`, value: { mode: 'create', target_path: data.targetPath }, cls: '' },
       ];
     } else if (data.status === 'new') {
-      options = [
-        { label: `Tambah file baru: ${data.targetPath}`, value: { mode: 'create', target_path: data.targetPath } },
-      ];
+      options = [{ label: `Tambah file baru: ${data.targetPath}`, value: { mode: 'create', target_path: data.targetPath } }];
     }
     const choice = await askSuggestion({ message: data.message, options });
     if (!choice) return;
     return runUpload(file, dir, choice.mode, choice.target_path);
   }
-
   let msg = 'Gagal upload: ' + r.status;
   try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {}
   alert(msg);
 }
 
 // =================================================================
-//  Quick Upload (legacy: 3 target tetap)
+//  Quick Upload (legacy)
 // =================================================================
 $('#upload-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -563,12 +550,87 @@ $('#upload-form').onsubmit = async (e) => {
     alert(`Nama file harus persis "${expected}". Kamu upload "${file.name}".`);
     return;
   }
-  await runUpload(file, target === 'config' ? '' : 'src/' + (target === 'personality' ? 'ai' : ''), 'update', targetPathMap[target]);
+  await runUpload(file, target === 'config' ? '' : (target === 'personality' ? 'src/ai' : 'src'), 'update', targetPathMap[target]);
   e.target.reset();
   loadPersonality(); loadConfigFields();
 };
 
-// init Files tab
+// =================================================================
+//  AUDIT LOG
+// =================================================================
+async function loadAudit(q = '') {
+  const url = '/api/audit?limit=500' + (q ? '&q=' + encodeURIComponent(q) : '');
+  const rows = await fetch(url).then(r => r.json());
+  const tbody = $('#audit-table tbody'); tbody.innerHTML = '';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.className = 'audit-row';
+    const dt = new Date(r.created_at * 1000);
+    const dts = dt.toISOString().slice(0,19).replace('T',' ');
+    tr.innerHTML = `
+      <td><small>${dts}</small></td>
+      <td><code>${esc(r.user)}</code></td>
+      <td><span class="audit-action">${esc(r.action)}</span></td>
+      <td><code>${esc(r.target || '-')}</code></td>
+      <td><div class="cell"><small>${esc(r.details || '')}</small></div></td>`;
+    tbody.appendChild(tr);
+  });
+  $('#audit-count').textContent = `${rows.length} entri`;
+}
+let auditTimer = null;
+$('#audit-search').addEventListener('input', (e) => {
+  clearTimeout(auditTimer);
+  auditTimer = setTimeout(() => loadAudit(e.target.value.trim()), 250);
+});
+$('#audit-refresh').onclick = () => loadAudit($('#audit-search').value);
+
+// =================================================================
+//  DB Backup / Restore
+// =================================================================
+$('#db-export').onclick = async () => {
+  try {
+    const r = await fetch('/api/db/export');
+    if (!r.ok) { alert('export gagal: ' + r.status); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `yanto-db-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert('export error: ' + e.message); }
+};
+
+$('#db-import-form').onsubmit = async (e) => {
+  e.preventDefault();
+  if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
+  const f = e.target;
+  const file = f.file.files[0];
+  if (!file) return;
+  const mode = f.mode.value;
+  const includeMaps    = f.includeMaps.checked;
+  const includeHistory = f.includeHistory.checked;
+  if (!includeMaps && !includeHistory) { alert('Pilih minimal 1 tabel.'); return; }
+  if (mode === 'replace') {
+    const yes = await askYesNo('Mode REPLACE akan menghapus data existing di tabel terpilih sebelum insert baru. Lanjutkan?', 'Replace DB');
+    if (!yes) return;
+  }
+  let content;
+  try { content = await file.text(); } catch (err) { alert('gagal baca file: ' + err.message); return; }
+  try { JSON.parse(content); } catch (err) { alert('file bukan JSON valid: ' + err.message); return; }
+
+  const ok = await jsonWrite('POST', '/api/db/import',
+    { content, mode, includeMaps, includeHistory },
+    `Yakin import DB? Mode=${mode}, maps=${includeMaps}, history=${includeHistory}.`);
+  if (ok) {
+    const d = await ok.json();
+    $('#db-import-result').textContent = JSON.stringify(d, null, 2);
+    alert(`Import sukses. Maps: +${d.mapInserted}, History: +${d.histInserted}` +
+          (d.mode === 'replace' ? ` (cleared maps:${d.mapCleared}, history:${d.histCleared})` : ''));
+    loadMaps(); loadHistory();
+  }
+};
+
 loadFiles();
 
 // =================================================================

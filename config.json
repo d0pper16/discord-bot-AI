@@ -17,7 +17,7 @@
   },
   "gemini": {
     "rpmLimit": 14,
-    "rpdLimit": 1400,
+    "rpdLimit": 995,
     "cooldownMs": 30000,
     "reserveTokens": 1
   },

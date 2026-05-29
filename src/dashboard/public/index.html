@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -15,9 +15,12 @@
   <div class="hdr-mid">
     <pre id="status" class="status"></pre>
   </div>
-  <div class="hdr-right writer">
-    <button id="btn-restart"  class="secondary" title="Restart bot tanpa pesan pamit">Restart Bot</button>
-    <button id="btn-shutdown" class="danger"    title="Bot ucap pamit, lalu mati. Dashboard juga ikut mati.">Matikan Bot</button>
+  <div class="hdr-right">
+    <button id="btn-theme" class="theme-btn" title="Toggle dark/light">&#9728;</button>
+    <div class="writer" style="display:flex;gap:6px">
+      <button id="btn-restart"  class="secondary" title="Restart bot tanpa pesan pamit">Restart Bot</button>
+      <button id="btn-shutdown" class="danger"    title="Bot ucap pamit, lalu mati. Dashboard juga ikut mati.">Matikan Bot</button>
+    </div>
   </div>
 </header>
 
@@ -27,7 +30,9 @@
   <button data-tab="config">Config Bot</button>
   <button data-tab="files">File Manager</button>
   <button data-tab="upload">Upload Script</button>
-  <button data-tab="history">Riwayat Chat (Cache)</button>
+  <button data-tab="history">Riwayat Chat</button>
+  <button data-tab="audit">Audit Log</button>
+  <button data-tab="db">Backup DB</button>
 </nav>
 
 <!-- ====== MAPS ====== -->
@@ -52,7 +57,7 @@
 <!-- ====== PERSONALITY ====== -->
 <section id="tab-personality" class="tab">
   <h2>Kepribadian Bot (personality.js)</h2>
-  <p class="hint">Edit di sini -> langsung dipakai bot tanpa restart. Nama bot diambil dari Config Bot, jadi rename otomatis menyebar ke prompt.</p>
+  <p class="hint">Edit langsung dipakai bot tanpa restart. Nama bot diambil dari Config, jadi rename otomatis menyebar.</p>
   <textarea id="personality-editor" rows="22" class="writer-input"></textarea>
   <div class="row">
     <button id="personality-save" class="writer">Simpan</button>
@@ -64,7 +69,7 @@
 <section id="tab-config" class="tab">
   <h2>Config Bot</h2>
   <p class="hint">
-    Tuning lewat kolom angka. Bot yang menulis config.json - dashboard cuma perantara,
+    Tuning lewat kolom angka. Bot yang menulis config.json - dashboard hanya perantara,
     semua nilai divalidasi min/max sebelum disimpan.
   </p>
 
@@ -73,7 +78,7 @@
     <label>
       Nama Bot
       <input id="cfg-name" type="text" maxlength="20" class="writer-input">
-      <small>2-20 char alfanumerik. Mengganti nama ini akan: ganti keyword pemicu (case-insensitive: DANDI/dandi/Dandi semua valid), sapaan masuk/keluar/restart, referensi diri di prompt, dan rewrite seluruh varian nama lama di cache.</small>
+      <small>2-20 char alfanumerik. <b>Bot punya 1 identitas tunggal</b> - mengganti nama menggantikan identitas lama secara penuh (tidak ada alias). Mengubah nama akan: ganti keyword pemicu (case-insensitive: DANDI/dandi/Dandi semua valid), sapaan masuk/keluar/restart, referensi diri di prompt, dan rewrite varian nama lama di cache.</small>
     </label>
     <div id="cfg-cache-info" class="cache-info"></div>
   </div>
@@ -83,28 +88,28 @@
 
     <label class="grid-row">
       <span>RPM Limit per key
-        <small>Request/menit per key. Saat tercapai, bot switch ke key cadangan. Range 2-60. Default 14 (Gemini Flash free tier).</small>
+        <small>Request/menit per key. Saat tercapai, bot switch ke key cadangan. <b>Range 5-14</b> (sesuai tier Gemini Flash free).</small>
       </span>
-      <input id="cfg-rpm" type="number" min="2" max="60" step="1" class="writer-input">
+      <input id="cfg-rpm" type="number" min="5" max="14" step="1" class="writer-input">
     </label>
 
-    <label class="grid-row">
+    <label class="grid-row locked-row">
       <span>RPD Limit per key
-        <small>Request/hari per key. Range 100-50000. Default 1400.</small>
+        <small><b>Dikunci 995</b> demi keamanan kuota harian. Tidak bisa diubah dari dashboard.</small>
       </span>
-      <input id="cfg-rpd" type="number" min="100" max="50000" step="1" class="writer-input">
+      <input id="cfg-rpd" type="number" value="995" disabled>
     </label>
 
     <label class="grid-row">
       <span>Cooldown switch API
-        <small>Lama (detik) sebuah key di-jeda setelah dilempar 429 oleh Gemini. Range 10-300 detik. Default 30. (Disimpan ms di file.)</small>
+        <small>Detik sebuah key di-jeda setelah dilempar 429 oleh Gemini. Range 10-300. Default 30. (Disimpan ms di file.)</small>
       </span>
       <input id="cfg-cd" type="number" min="10" max="300" step="1" class="writer-input">
     </label>
 
     <label class="grid-row">
       <span>Reserve token
-        <small>Berapa kuota RPM dicadangkan untuk balasan setelah "sabar ya kak...". Range 0-3, harus < RPM Limit. Default 1.</small>
+        <small>Kuota RPM dicadangkan untuk balasan setelah "sabar...". Range 0-3, harus &lt; RPM Limit. Default 1.</small>
       </span>
       <input id="cfg-reserve" type="number" min="0" max="3" step="1" class="writer-input">
     </label>
@@ -115,14 +120,14 @@
 
     <label class="grid-row">
       <span>Threshold similarity cache
-        <small>Sensitivitas Jaccard untuk anggap dua pertanyaan "sama". 0.5 = banyak match, 1.0 = harus identik. Default 0.82.</small>
+        <small>Sensitivitas Jaccard. 0.5 = banyak match, 1.0 = harus identik. Default 0.82.</small>
       </span>
       <input id="cfg-sim" type="number" min="0.5" max="1.0" step="0.01" class="writer-input">
     </label>
 
     <label class="grid-row">
       <span>Memori pesan terakhir
-        <small>0-30 pasang Q/A dikirim ke AI sebagai konteks. 0 = tanpa memori. Default 10.</small>
+        <small>0-30 pasang Q/A dikirim ke AI sebagai konteks. Default 10.</small>
       </span>
       <input id="cfg-ctx" type="number" min="0" max="30" step="1" class="writer-input">
     </label>
@@ -130,7 +135,7 @@
     <label>
       Pemicu jawaban detail (1 frasa per baris, max 50)
       <textarea id="cfg-triggers" rows="6" class="writer-input"></textarea>
-      <small>Bila pesan user mengandung salah satu frasa ini, bot regenerate jawaban (replace cache).</small>
+      <small>Bila pesan user mengandung salah satu frasa ini, bot regenerate jawaban.</small>
     </label>
   </div>
 
@@ -144,9 +149,9 @@
 <section id="tab-files" class="tab">
   <h2>File Manager</h2>
   <p class="hint">
-    Edit, tambah, atau hapus file project secara langsung. Penulisan atomic
-    (.tmp -> rename) - file lain tidak terganggu. File "dilindungi" (core)
-    bisa di-edit tapi tidak bisa dihapus.
+    Edit, tambah, atau hapus file project secara langsung. Penulisan atomic (.tmp -> rename),
+    file lain tidak terganggu. File "protected" (core) bisa di-edit tapi tidak bisa dihapus.
+    Save src/bot.js otomatis trigger restart.
   </p>
   <div class="row writer" style="margin-bottom:12px">
     <button id="files-refresh" class="secondary">Refresh</button>
@@ -178,12 +183,11 @@
   </div>
 </section>
 
-<!-- ====== UPLOAD (legacy quick) ====== -->
+<!-- ====== UPLOAD QUICK ====== -->
 <section id="tab-upload" class="tab">
   <h2>Upload Script (cepat)</h2>
   <p class="hint">
-    Untuk replace cepat 3 file utama. Untuk file lain / tambah file baru, pakai tab File Manager.
-    Upload bot.js akan auto-restart bot ~3 detik kemudian (silent, tanpa pesan pamit).
+    Untuk replace cepat 3 file utama. Upload bot.js auto-restart bot ~3 detik (silent, tanpa pesan pamit).
   </p>
   <form id="upload-form" class="card writer">
     <label>Target file
@@ -229,7 +233,61 @@
   </div>
 </section>
 
-<!-- ====== MODAL: KONFIRMASI USER/PASS ====== -->
+<!-- ====== AUDIT LOG ====== -->
+<section id="tab-audit" class="tab">
+  <h2>Audit Log</h2>
+  <p class="hint">Log siapa-ubah-apa-kapan. Read-only untuk semua role (tidak bisa dihapus, supaya jejak audit utuh).</p>
+  <div class="history-toolbar">
+    <input id="audit-search" type="text" placeholder="cari user / action / target / details...">
+    <button id="audit-refresh" class="secondary">Refresh</button>
+    <span id="audit-count" class="hint"></span>
+  </div>
+  <div class="history-scroll">
+    <table id="audit-table">
+      <thead><tr><th>Waktu</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ====== BACKUP DB ====== -->
+<section id="tab-db" class="tab">
+  <h2>Backup &amp; Restore Database</h2>
+  <p class="hint">
+    Backup berisi tabel <code>map_data</code> + <code>chat_history</code> dalam JSON.
+    Pakai untuk migrasi/restore ke server lain.
+  </p>
+
+  <div class="card">
+    <h3>Export</h3>
+    <p class="hint">Download backup lengkap. Tersedia untuk dev &amp; admin (read-only action).</p>
+    <button id="db-export">Download backup .json</button>
+  </div>
+
+  <div class="card writer">
+    <h3>Import</h3>
+    <p class="hint">Upload file JSON backup. Pilih mode <b>merge</b> (tambah ke existing) atau <b>replace</b> (kosongkan dulu lalu isi).</p>
+    <form id="db-import-form">
+      <label>File backup<input type="file" name="file" accept=".json" required class="writer-input"></label>
+      <label>Mode
+        <select name="mode" class="writer-input">
+          <option value="merge">merge (tambah ke yang ada)</option>
+          <option value="replace">replace (hapus dulu lalu insert)</option>
+        </select>
+      </label>
+      <label class="row" style="align-items:center;gap:6px">
+        <input type="checkbox" name="includeMaps" checked style="width:auto"> Sertakan map_data
+      </label>
+      <label class="row" style="align-items:center;gap:6px">
+        <input type="checkbox" name="includeHistory" checked style="width:auto"> Sertakan chat_history
+      </label>
+      <button type="submit" class="danger">Import</button>
+    </form>
+    <pre id="db-import-result"></pre>
+  </div>
+</section>
+
+<!-- ====== MODAL: KONFIRMASI ====== -->
 <div id="confirm-modal" class="modal" hidden>
   <div class="modal-box">
     <h3>Konfirmasi Perubahan</h3>
@@ -244,7 +302,7 @@
   </div>
 </div>
 
-<!-- ====== MODAL: YES/NO sederhana ====== -->
+<!-- ====== MODAL: YES/NO ====== -->
 <div id="yesno-modal" class="modal" hidden>
   <div class="modal-box">
     <h3 id="yn-title">Konfirmasi</h3>
@@ -256,7 +314,7 @@
   </div>
 </div>
 
-<!-- ====== MODAL: PILIH AKSI UPLOAD (typo guard / new) ====== -->
+<!-- ====== MODAL: SUGGESTION (typo/new) ====== -->
 <div id="suggest-modal" class="modal" hidden>
   <div class="modal-box modal-lg">
     <h3>Konfirmasi File Upload</h3>
@@ -285,7 +343,7 @@
   </div>
 </div>
 
-<!-- ====== OVERLAY: RESTART/SHUTDOWN ====== -->
+<!-- ====== OVERLAY: BUSY ====== -->
 <div id="busy-overlay" class="busy-overlay" hidden>
   <div class="busy-box">
     <div class="spinner"></div>

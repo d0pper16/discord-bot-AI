@@ -34,9 +34,15 @@ Aturan jawaban:
 `.trim();
 }
 
-function buildSystemPrompt({ mapContext = '', extraNote = '', name = 'Yanto' } = {}) {
+const LANG_NAMES = { id: 'Indonesian', en: 'English', pt: 'Portuguese' };
+
+function buildSystemPrompt({ mapContext = '', extraNote = '', name = 'Yanto', lang = 'id' } = {}) {
+  const langInstr = lang !== 'id'
+    ? `\n=== LANGUAGE INSTRUCTION (PENTING) ===\nUser menulis dalam bahasa ${LANG_NAMES[lang] || lang}. JAWAB DALAM BAHASA ${(LANG_NAMES[lang] || lang).toUpperCase()}, JANGAN dalam bahasa Indonesia. Pertahankan kepribadian ${name} (santai, ramah, kocak), cuma ganti bahasanya.\n`
+    : '';
   return [
     buildPersona(name),
+    langInstr,
     mapContext
       ? `\n=== DATA MAP (sumber kebenaran) ===\n${mapContext}\n=== AKHIR DATA MAP ===`
       : '',

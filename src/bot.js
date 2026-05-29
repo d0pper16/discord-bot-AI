@@ -7,6 +7,7 @@ const log     = require('./utils/logger');
 const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
+const { detectLang, tr } = require('./ai/lang');
 const { bus } = require('./utils/hotReload');
 
 // ---- konstanta path ----
@@ -43,17 +44,41 @@ const ucfirst = (s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 const lower   = (s) => s.toLowerCase();
 
 // ---- template pesan (semua memakai nama dinamis) ----
+// ---- template pesan: hanya wrapper translation ----
 const MSG = {
-  hello:    (n) => `halo, kenalin aku ${lower(n)} aku adalah AI paling ganteng sedunia, yang siap membantu menjawab pertanyaan kalian di server ini, tinggal sebut aja namaku "${lower(n)}" maka aku akan menjawab semua pertanyaan kalian`,
-  back:     (n) => `hoamm... enak banget ${lower(n)} tidurnya walau gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone`,
-  farewell: (n) => `${ucfirst(n)} capek, ${lower(n)} tidur dulu yaa, babay semua... @everyone`,
-  apiFail:  (_n) => `maaf yah, token/API kamu salah/error nih, aku gagal mendarat`,
-  sabar:    (_n) => `sabar ya kak, kasih aku mikir dulu 1 menit yaa`,
-  warn:     (n, mention) => `jika kamu tidak bisa bersabar maka akan ${lower(n)} bungkam ya ${mention}`,
-  timeout:  (n, mention) => `maaf yah ${mention} ${lower(n)} bungkam, kamu gasabaran sih jadi manusia, ${lower(n)} robot bukan nabi boyyy...`,
-  empty:    (n) => `iya, ada apa? tanya aja, sebut "${lower(n)}" + pertanyaannya.`,
-  errorApi: () => `aduh otak gue lagi nge-lag (API error). coba lagi sebentar yaa.`,
+  hello:    (n, lang = 'id')        => tr('hello',    lang, n),
+  back:     (n, lang = 'id')        => tr('back',     lang, n),
+  farewell: (n, lang = 'id')        => tr('farewell', lang, n),
+  apiFail:  (_n, lang = 'id')       => tr('apiFail',  lang),
+  sabar:    (_n, lang = 'id')       => tr('sabar',    lang),
+  warn:     (n, mention, lang='id') => tr('warn',     lang, n, mention),
+  timeout:  (n, mention, lang='id') => tr('timeout',  lang, n, mention),
+  empty:    (n, lang = 'id')        => tr('empty',    lang, n),
+  errorApi: (lang = 'id')           => tr('errorApi', lang),
 };
+
+// channel-level cached language untuk pesan broadcast (hello/back/farewell)
+let CHANNEL_LANG = 'id';
+async function refreshChannelLang() {
+  const id = process.env.YANTO_CHANNEL_ID;
+  if (!id) return;
+  try {
+    const ch = await client.channels.fetch(id);
+    if (!ch || !ch.isTextBased()) return;
+    const msgs = await ch.messages.fetch({ limit: 30 });
+    const text = Array.from(msgs.values())
+      .filter((m) => !m.author.bot && m.content && m.content.length > 5)
+      .map((m) => m.content)
+      .join(' ');
+    if (text.length > 50) {
+      const lng = detectLang(text);
+      CHANNEL_LANG = lng;
+      log.info(`[lang] channel language detected: ${lng}`);
+    }
+  } catch (err) {
+    log.warn('[lang] gagal deteksi channel:', err.message);
+  }
+}
 
 // ---- state ----
 let SLEEPING = false; // saat true: bot SAMA SEKALI tidak merespon
@@ -128,17 +153,19 @@ async function coldStartFlow() {
   log.info(`[startup] cold start, validasi Gemini dalam ${COLD_DELAY_MS}ms...`);
   await new Promise((r) => setTimeout(r, COLD_DELAY_MS));
 
+  await refreshChannelLang();
+
   // attempt 1
   let v = await gemini.validate();
   if (v.ok) {
     log.info(`[startup] Gemini OK via ${v.keyId}`);
     SLEEPING = false;
-    await sendToTargetChannel(MSG.hello(botName()));
+    await sendToTargetChannel(MSG.hello(botName(), CHANNEL_LANG));
     return;
   }
 
   log.error('[startup] validasi Gemini GAGAL (attempt 1)');
-  await sendToTargetChannel(MSG.apiFail(botName()));
+  await sendToTargetChannel(MSG.apiFail(botName(), CHANNEL_LANG));
 
   // attempt 2 (retry sekali setelah 30s)
   await new Promise((r) => setTimeout(r, COLD_RETRY_MS));
@@ -146,19 +173,19 @@ async function coldStartFlow() {
   if (v.ok) {
     log.info(`[startup] Gemini OK via ${v.keyId} (attempt 2)`);
     SLEEPING = false;
-    await sendToTargetChannel(MSG.hello(botName()));
+    await sendToTargetChannel(MSG.hello(botName(), CHANNEL_LANG));
     return;
   }
 
   log.error('[startup] validasi Gemini gagal total. Bot tetap halt sampai .env diperbaiki & restart.');
-  // SLEEPING tetap true -> bot diam total
 }
 
 async function restartFlow() {
   log.info('[startup] restart detected, jeda lalu sapa kembali...');
   await new Promise((r) => setTimeout(r, WAKEUP_DELAY_MS));
+  await refreshChannelLang();
   SLEEPING = false;
-  await sendToTargetChannel(MSG.back(botName()));
+  await sendToTargetChannel(MSG.back(botName(), CHANNEL_LANG));
 }
 
 // =================================================================
@@ -189,7 +216,7 @@ async function gracefulShutdown(reason = 'shutdown') {
   log.info(`[shutdown] ${reason} -- pamit + exit dalam ${SHUTDOWN_DELAY_MS}ms`);
 
   try {
-    await sendToTargetChannel(MSG.farewell(botName()));
+    await sendToTargetChannel(MSG.farewell(botName(), CHANNEL_LANG));
   } catch (err) {
     log.warn('[shutdown] gagal ucap pamit:', err.message);
   }
@@ -210,6 +237,7 @@ bus.on('shutdown',   () => gracefulShutdown('tombol matikan bot'));
 async function processQuestion(question, msg, opts = {}) {
   const { allowReserve = false, isDeferred = false } = opts;
   const cfg = loadCfg();
+  const lang = detectLang(question);
 
   // 1) Cek cache
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
@@ -226,6 +254,7 @@ async function processQuestion(question, msg, opts = {}) {
   const mapCtx = mapData.buildContext(question);
   const sysPrompt = buildSystemPrompt({
     name: botName(),
+    lang,
     mapContext: mapCtx,
     extraNote: followUp
       ? 'User minta jawaban LEBIH DETAIL/SPESIFIK dari sebelumnya. Tambahkan rincian relevan dari DATA MAP.'
@@ -254,7 +283,7 @@ async function processQuestion(question, msg, opts = {}) {
       userId: msg.author.id,
       question,
       answer,
-      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}`,
+      source: `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}${lang !== 'id' ? `+${lang}` : ''}`,
     });
   }
   await sendLong(msg, answer);
@@ -269,6 +298,7 @@ async function processQuestion(question, msg, opts = {}) {
 async function handleRateLimited(msg, question) {
   const userId  = msg.author.id;
   const mention = `<@${userId}>`;
+  const lang    = detectLang(question);
   const w = WAITING.get(userId);
 
   if (!w) {
@@ -281,26 +311,29 @@ async function handleRateLimited(msg, question) {
       } catch (err) {
         log.error('[deferred] gagal:', err.message);
         try {
+          const stillMsg = lang === 'en' ? 'still rate-limited, please try again in a few minutes.'
+            : lang === 'pt' ? 'ainda com limite, tenta de novo daqui a alguns minutos.'
+            : 'masih limit nih, coba beberapa menit lagi yaa.';
           await msg.channel.send({
-            content: `${mention} masih limit nih, coba beberapa menit lagi yaa.`,
+            content: `${mention} ${stillMsg}`,
             allowedMentions: { parse: ['users'] },
           });
         } catch (_) {}
       }
-      // (cur dipakai untuk nothing - just safety)
       void cur;
     }, SABAR_WAIT_MS);
 
-    WAITING.set(userId, { count: 1, ts: Date.now(), handle, question });
-    await msg.reply(MSG.sabar(botName()));
+    WAITING.set(userId, { count: 1, ts: Date.now(), handle, question, lang });
+    await msg.reply(MSG.sabar(botName(), lang));
     return;
   }
 
   // sudah ada entry waiting -> spam
   w.count++;
+  const wlang = w.lang || lang;
 
   if (w.count === 2) {
-    await msg.reply(MSG.warn(botName(), mention));
+    await msg.reply(MSG.warn(botName(), mention, wlang));
     return;
   }
 
@@ -324,7 +357,7 @@ async function handleRateLimited(msg, question) {
   TIMEOUTS.set(userId, Date.now() + TIMEOUT_DURATION_MS);
 
   try {
-    await msg.reply(MSG.timeout(botName(), mention));
+    await msg.reply(MSG.timeout(botName(), mention, wlang));
   } catch (_) {}
 }
 
@@ -359,7 +392,8 @@ client.on(Events.MessageCreate, async (msg) => {
 
     const rawQuestion = stripKeyword(msg.content, keyword);
     if (!rawQuestion) {
-      await msg.reply(MSG.empty(botName()));
+      const lang = detectLang(msg.content);
+      await msg.reply(MSG.empty(botName(), lang));
       return;
     }
 
@@ -382,7 +416,10 @@ client.on(Events.MessageCreate, async (msg) => {
         return handleRateLimited(msg, rawQuestion);
       }
       log.error('processQuestion error:', err.message);
-      try { await msg.reply(MSG.errorApi()); } catch (_) {}
+      try {
+        const lang = detectLang(rawQuestion);
+        await msg.reply(MSG.errorApi(lang));
+      } catch (_) {}
     }
   } catch (err) {
     log.error('handler error:', err);

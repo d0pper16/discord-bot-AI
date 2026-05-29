@@ -11,6 +11,7 @@ const log     = require('../utils/logger');
 const mapData = require('../db/mapData');
 const cache   = require('../db/chatHistory');
 const gemini  = require('../ai/gemini');
+const audit   = require('../db/audit');
 const db      = require('../db/database');
 const { bus } = require('../utils/hotReload');
 
@@ -75,12 +76,15 @@ function requireConfirm(req, res, next) {
 
 // =================================================================
 //  Validator config
+//  RPD dikunci 995 (req. user, demi keamanan kuota harian)
+//  RPM range 5-14 (req. user)
 // =================================================================
+const RPD_FIXED = 995;
 const BOUNDS = {
   name:                { min: 2,   max: 20 },
   similarityThreshold: { min: 0.5, max: 1.0 },
-  rpmLimit:            { min: 2,   max: 60 },
-  rpdLimit:            { min: 100, max: 50000 },
+  rpmLimit:            { min: 5,   max: 14 },
+  rpdLimit:            { fixed: RPD_FIXED },
   cooldownSec:         { min: 10,  max: 300 },
   reserveTokens:       { min: 0,   max: 3 },
   maxContextMessages:  { min: 0,   max: 30 },
@@ -100,10 +104,8 @@ function validateConfigInput(input) {
   if (!Number.isInteger(rpm) || rpm < BOUNDS.rpmLimit.min || rpm > BOUNDS.rpmLimit.max) {
     errs.push(`RPM limit harus integer ${BOUNDS.rpmLimit.min} - ${BOUNDS.rpmLimit.max}.`);
   }
-  const rpd = Number(input.rpdLimit);
-  if (!Number.isInteger(rpd) || rpd < BOUNDS.rpdLimit.min || rpd > BOUNDS.rpdLimit.max) {
-    errs.push(`RPD limit harus integer ${BOUNDS.rpdLimit.min} - ${BOUNDS.rpdLimit.max}.`);
-  }
+  // RPD dikunci di RPD_FIXED, abaikan input dari client
+  const rpd = RPD_FIXED;
   const cdSec = Number(input.cooldownSec);
   if (!Number.isInteger(cdSec) || cdSec < BOUNDS.cooldownSec.min || cdSec > BOUNDS.cooldownSec.max) {
     errs.push(`Cooldown switch API harus ${BOUNDS.cooldownSec.min}-${BOUNDS.cooldownSec.max} detik.`);
@@ -340,7 +342,7 @@ function start() {
         name: cfg.name || 'Yanto',
         similarityThreshold: cfg.cache.similarityThreshold,
         rpmLimit: cfg.gemini.rpmLimit,
-        rpdLimit: cfg.gemini.rpdLimit,
+        rpdLimit: RPD_FIXED,
         cooldownSec: Math.round((cfg.gemini.cooldownMs || 60000) / 1000),
         reserveTokens: cfg.gemini.reserveTokens || 0,
         maxContextMessages: cfg.history.maxContextMessages,
@@ -358,6 +360,29 @@ function start() {
     const q = req.query.q || '';
     const limit = Math.min(Number(req.query.limit) || 200, 1000);
     res.json(cache.searchHistory(q, limit));
+  });
+
+  // ----------- Audit Log (read-only utk admin & dev) -----------
+  app.get('/api/audit', (req, res) => {
+    const q     = req.query.q || '';
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    res.json(audit.search(q, limit));
+  });
+
+  // ----------- DB Export (dev & admin boleh download backup) -----------
+  app.get('/api/db/export', (req, res) => {
+    const data = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      map_data: db.prepare('SELECT * FROM map_data ORDER BY id').all(),
+      chat_history: db.prepare('SELECT * FROM chat_history ORDER BY id').all(),
+    };
+    audit.log(req.auth.user, 'db.export', 'database',
+      JSON.stringify({ maps: data.map_data.length, history: data.chat_history.length }));
+    res.setHeader('Content-Disposition',
+      `attachment; filename="yanto-db-${Date.now()}.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify(data, null, 2));
   });
 
   // ----------- File manager: list & read -----------
@@ -391,6 +416,7 @@ function start() {
     const { content } = req.body;
     if (typeof content !== 'string') return res.status(400).json({ error: 'content wajib string' });
     atomicWriteFile(PERSONALITY_FILE, Buffer.from(content, 'utf8'));
+    audit.log(req.auth.user, 'personality.save', 'src/ai/personality.js', `${content.length} bytes`);
     log.info(`[dashboard] personality.js diperbarui oleh ${req.auth.user}`);
     res.json({ ok: true });
   });
@@ -430,16 +456,20 @@ function start() {
     }
 
     atomicWriteFile(CONFIG_FILE, Buffer.from(JSON.stringify(newCfg, null, 2), 'utf8'));
+    audit.log(req.auth.user, 'config.save', 'config.json',
+      JSON.stringify({ oldName, newName, renamedRows: renameInfo.changes, clearedRows: cleared }));
     log.info(`[dashboard] config.json diperbarui oleh ${req.auth.user}`);
     res.json({ ok: true, renamedRows: renameInfo.changes, clearedRows: cleared });
   });
 
   // ----------- Tombol Restart / Shutdown -----------
-  app.post('/api/restart', requireDev, requireConfirm, (_req, res) => {
+  app.post('/api/restart', requireDev, requireConfirm, (req, res) => {
+    audit.log(req.auth.user, 'system.restart', 'process', '');
     setTimeout(() => bus.emit('restart'), 500);
     res.json({ ok: true, action: 'restart' });
   });
-  app.post('/api/shutdown', requireDev, requireConfirm, (_req, res) => {
+  app.post('/api/shutdown', requireDev, requireConfirm, (req, res) => {
+    audit.log(req.auth.user, 'system.shutdown', 'process', '');
     setTimeout(() => bus.emit('shutdown'), 500);
     res.json({ ok: true, action: 'shutdown' });
   });
@@ -458,6 +488,7 @@ function start() {
         catch (e) { return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
       }
       atomicWriteFile(sf.abs, Buffer.from(content, 'utf8'));
+      audit.log(req.auth.user, 'files.save', sf.rel, `${content.length} bytes`);
       log.info(`[files] save ${sf.rel} oleh ${req.auth.user}`);
 
       const isBot = sf.rel === 'src/bot.js';
@@ -482,6 +513,7 @@ function start() {
         catch (e) { return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
       }
       atomicWriteFile(sf.abs, Buffer.from(String(content), 'utf8'));
+      audit.log(req.auth.user, 'files.create', sf.rel, `${String(content).length} bytes`);
       log.info(`[files] create ${sf.rel} oleh ${req.auth.user}`);
       res.json({ ok: true, path: sf.rel });
     } catch (e) {
@@ -499,6 +531,7 @@ function start() {
       }
       if (!fs.existsSync(sf.abs)) return res.status(404).json({ error: 'file tidak ditemukan' });
       fs.unlinkSync(sf.abs);
+      audit.log(req.auth.user, 'files.delete', sf.rel, '');
       log.info(`[files] delete ${sf.rel} oleh ${req.auth.user}`);
       res.json({ ok: true, path: sf.rel });
     } catch (e) {
@@ -590,6 +623,7 @@ function start() {
           }
           atomicWriteFile(sf.abs, buf);
           cleanup();
+          audit.log(req.auth.user, 'files.upload.update', sf.rel, '');
           log.info(`[files] upload UPDATE ${sf.rel} oleh ${req.auth.user}`);
           const isBot = sf.rel === 'src/bot.js';
           if (isBot) setTimeout(() => bus.emit('upload:bot'), 1000);
@@ -609,6 +643,7 @@ function start() {
           }
           atomicWriteFile(sf.abs, buf);
           cleanup();
+          audit.log(req.auth.user, 'files.upload.create', sf.rel, '');
           log.info(`[files] upload CREATE ${sf.rel} oleh ${req.auth.user}`);
           return res.json({ ok: true, mode: 'create', path: sf.rel });
         }
@@ -626,16 +661,23 @@ function start() {
   app.post('/api/maps', requireDev, requireConfirm, (req, res) => {
     const { topic, content, tags } = req.body || {};
     if (!topic || !content) return res.status(400).json({ error: 'topic & content wajib' });
-    res.json(mapData.addMap({ topic, content, tags: tags || '' }));
+    const row = mapData.addMap({ topic, content, tags: tags || '' });
+    audit.log(req.auth.user, 'map.create', `map:${row.id}`, topic);
+    res.json(row);
   });
   app.put('/api/maps/:id', requireDev, requireConfirm, (req, res) => {
     const id = Number(req.params.id);
     const { topic, content, tags } = req.body || {};
     if (!topic || !content) return res.status(400).json({ error: 'topic & content wajib' });
-    res.json(mapData.updateMap({ id, topic, content, tags: tags || '' }));
+    const row = mapData.updateMap({ id, topic, content, tags: tags || '' });
+    audit.log(req.auth.user, 'map.update', `map:${id}`, topic);
+    res.json(row);
   });
   app.delete('/api/maps/:id', requireDev, requireConfirm, (req, res) => {
-    res.json({ ok: mapData.deleteMap(Number(req.params.id)) });
+    const id = Number(req.params.id);
+    const ok = mapData.deleteMap(id);
+    audit.log(req.auth.user, 'map.delete', `map:${id}`, '');
+    res.json({ ok });
   });
 
   // ----------- Chat history -----------
@@ -643,13 +685,83 @@ function start() {
     const id = Number(req.params.id);
     const { question, answer } = req.body || {};
     if (!question || !answer) return res.status(400).json({ error: 'question & answer wajib' });
-    res.json(cache.updateEntry(id, { question, answer }));
+    const row = cache.updateEntry(id, { question, answer });
+    audit.log(req.auth.user, 'history.update', `history:${id}`, '');
+    res.json(row);
   });
   app.delete('/api/history/:id', requireDev, requireConfirm, (req, res) => {
-    res.json({ ok: cache.deleteEntry(Number(req.params.id)) });
+    const id = Number(req.params.id);
+    const ok = cache.deleteEntry(id);
+    audit.log(req.auth.user, 'history.delete', `history:${id}`, '');
+    res.json({ ok });
   });
   app.delete('/api/history', requireDev, requireConfirm, (req, res) => {
-    res.json({ deleted: cache.clearAll() });
+    const deleted = cache.clearAll();
+    audit.log(req.auth.user, 'history.clearAll', 'all', `${deleted} rows`);
+    res.json({ deleted });
+  });
+
+  // ----------- DB Import -----------
+  app.post('/api/db/import', requireDev, requireConfirm, (req, res) => {
+    try {
+      const {
+        content,
+        mode = 'merge',           // 'merge' | 'replace'
+        includeMaps = true,
+        includeHistory = true,
+      } = req.body || {};
+      const data = typeof content === 'string' ? JSON.parse(content) : content;
+      if (!data || (!Array.isArray(data.map_data) && !Array.isArray(data.chat_history))) {
+        return res.status(400).json({ error: 'format JSON tidak valid (butuh map_data dan/atau chat_history array)' });
+      }
+      let mapInserted = 0, histInserted = 0, mapCleared = 0, histCleared = 0;
+      const trx = db.transaction(() => {
+        if (mode === 'replace') {
+          if (includeMaps) {
+            mapCleared = db.prepare('SELECT COUNT(*) AS c FROM map_data').get().c;
+            db.exec('DELETE FROM map_data');
+          }
+          if (includeHistory) {
+            histCleared = db.prepare('SELECT COUNT(*) AS c FROM chat_history').get().c;
+            db.exec('DELETE FROM chat_history');
+          }
+        }
+        if (includeMaps && Array.isArray(data.map_data)) {
+          const ins = db.prepare('INSERT INTO map_data (topic, content, tags) VALUES (?, ?, ?)');
+          for (const m of data.map_data) {
+            if (m && m.topic && m.content) {
+              ins.run(String(m.topic), String(m.content), String(m.tags || ''));
+              mapInserted++;
+            }
+          }
+        }
+        if (includeHistory && Array.isArray(data.chat_history)) {
+          const ins = db.prepare(`INSERT INTO chat_history
+            (channel_id, user_id, question, question_norm, answer, source)
+            VALUES (?, ?, ?, ?, ?, ?)`);
+          for (const c of data.chat_history) {
+            if (c && c.question && c.answer) {
+              const norm = c.question_norm || cache.normalize(c.question);
+              ins.run(
+                String(c.channel_id || ''),
+                String(c.user_id || ''),
+                String(c.question),
+                String(norm),
+                String(c.answer),
+                String(c.source || 'imported')
+              );
+              histInserted++;
+            }
+          }
+        }
+      });
+      trx();
+      audit.log(req.auth.user, 'db.import', 'database',
+        JSON.stringify({ mode, mapInserted, histInserted, mapCleared, histCleared }));
+      res.json({ ok: true, mode, mapInserted, histInserted, mapCleared, histCleared });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
   });
 
   // ----------- Error handler -----------
