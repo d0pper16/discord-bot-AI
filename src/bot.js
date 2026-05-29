@@ -927,18 +927,30 @@ async function updatePresence() {
       return;
     }
 
-    // SINGLE FRAME: "Watching <map> | 1.4K Active | 2.1M Visit | 510 fav"
+    // Rich fields: name (utama), details (detail), state (fallback).
+    //
+    // Discord client render rules untuk USER BOT:
+    //   - Tipe Watching/Playing/Listening + tanpa app cover -> hanya "name"
+    //     yang tampil. details/state biasanya diabaikan.
+    //   - Tipe Custom + state -> baris itu yang tampil (tanpa prefix).
+    //
+    // Untuk multi-line "Watching <Map>\n1.4K Active..." kita pakai
+    // ActivityType.Custom dengan state berisi gabungan (yang KEPASTIAN
+    // tampil) PLUS Watching activity sebagai backup di emoji line.
     const mapName = wstate.name || 'Roblox';
     const active  = wstate.playing != null ? fmtKMB(wstate.playing)   : '...';
     const visits  = wstate.visits  != null ? fmtKMB(wstate.visits)    : '...';
     const fav     = wstate.favorited != null ? fmtKMB(wstate.favorited) : '...';
+    const detailLine = `${active} Active | ${visits} Visit | ${fav} fav`;
 
+    // ActivityType.Custom -> "state" yang ditampilkan tanpa prefix
+    // (mendukung emoji + 128 char). Tipe ini PALING reliable utk bot biasa.
     await client.user.setPresence({
       status: 'online',
       activities: [{
-        type: ActivityType.Watching,
-        name: mapName,
-        state: `${active} Active | ${visits} Visit | ${fav} fav`,
+        type: ActivityType.Custom,
+        name: 'custom-status',                                  // wajib ada, gak ditampilkan
+        state: `\uD83D\uDC41\uFE0F Watching ${mapName} | ${detailLine}`,  // 👁️ Watching <Map> | 1.4K Active...
       }],
     });
   } catch (err) {
