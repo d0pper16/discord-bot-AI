@@ -197,7 +197,7 @@ async function refreshStatus() {
       `Reserve  : ${g.reserveTokens || 0} token`;
   } catch (e) { $('#status').textContent = 'status err: ' + e.message; }
 }
-setInterval(refreshStatus, 5000);
+setInterval(refreshStatus, 10000);
 refreshStatus();
 
 // =================================================================
@@ -220,6 +220,7 @@ function setBar(el, pct) {
 
 async function refreshSystem(force = false) {
   if (!force && !$('#tab-monitor').classList.contains('active')) return;
+  if (!force && document.hidden) return;
   try {
     const r = await fetch('/api/system').then(r => r.json());
     // RAM
@@ -264,7 +265,7 @@ async function refreshSystem(force = false) {
     $('#api-secondary').classList.toggle('api-active', last === 'SECONDARY');
   } catch (e) { /* swallow */ }
 }
-setInterval(() => refreshSystem(false), 2000);
+setInterval(() => refreshSystem(false), 5000);
 refreshSystem(true);
 
 // =================================================================
@@ -609,6 +610,7 @@ function fmtCompact(n) {
 }
 async function refreshRoblox(force = false) {
   if (!force && !$('#tab-roblox').classList.contains('active')) return;
+  if (!force && document.hidden) return;
   try {
     const s = await fetch('/api/roblox-status').then(r => r.json());
     const wrap = $('#rb-status');
@@ -680,9 +682,17 @@ async function refreshRoblox(force = false) {
     }
   } catch (e) { /* swallow */ }
 }
-setInterval(() => refreshRoblox(false), 15000);
+setInterval(() => refreshRoblox(false), 60000);  // 1 menit, match server-side tickPlayer
 loadRobloxConfig();
 refreshRoblox(true);
+
+// Pause polling saat tab browser tidak aktif (hemat CPU/bandwidth/battery).
+// Resume + fetch sekali saat tab kembali visible.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && $('#tab-roblox').classList.contains('active')) {
+    refreshRoblox(true);
+  }
+});
 
 // =================================================================
 //  CONFIG
