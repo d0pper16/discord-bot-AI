@@ -367,3 +367,60 @@ code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-si
 @media (max-width: 600px) {
   .rb-icon-large, .rb-icon-skel { width: 88px; height: 88px; }
 }
+
+
+
+/* ===== Top 10 chart (chat log) ===== */
+.chatlog-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chart-row {
+  display: grid;
+  grid-template-columns: 36px minmax(120px, 180px) 1fr minmax(120px, 160px);
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border-soft);
+  font-size: 13px;
+}
+.chart-rank {
+  font-weight: 700; color: var(--accent); font-size: 14px;
+}
+.chart-name b { color: var(--text); }
+.chart-name small { display: block; color: var(--text-dim); font-size: 11px; }
+.chart-bar-wrap {
+  position: relative;
+  background: var(--input-bg);
+  height: 22px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.chart-bar {
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  height: 100%;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+.chart-count {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-shadow: 0 0 3px var(--bg);
+}
+.chart-meta { color: var(--text-muted); font-size: 11px; }
+@media (max-width: 720px) {
+  .chart-row {
+    grid-template-columns: 32px 1fr;
+    grid-template-rows: auto auto auto;
+  }
+  .chart-bar-wrap { grid-column: 1 / -1; }
+  .chart-meta     { grid-column: 1 / -1; }
+}

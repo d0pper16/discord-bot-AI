@@ -12,6 +12,7 @@ const log     = require('../utils/logger');
 const mapData = require('../db/mapData');
 const cache   = require('../db/chatHistory');
 const chatLog = require('../db/chatLog');
+const customMemory = require('../db/customMemory');
 const gemini  = require('../ai/gemini');
 const audit   = require('../db/audit');
 const db      = require('../db/database');
@@ -432,19 +433,58 @@ function start() {
       entries: chatLog.search(q, limit),
     });
   });
+
+  // Top-N user yg paling sering tanya (untuk chart)
+  app.get('/api/chat-stats', (_req, res) => {
+    res.json({ topUsers: chatLog.topUsers(10), total: chatLog.count() });
+  });
+
+  // ----------- Custom Memory (ingatan buatan) -----------
+  app.get('/api/custom-memory', (req, res) => {
+    const q = req.query.q || '';
+    res.json({ total: customMemory.count(), entries: customMemory.search(q, 500) });
+  });
+  app.post('/api/custom-memory', requireDev, requireConfirm, (req, res) => {
+    try {
+      const { question, answer, tags } = req.body || {};
+      if (!question || !answer) return res.status(400).json({ error: 'question & answer wajib' });
+      const row = customMemory.add({ question, answer, tags: tags || '' });
+      audit.log(req.auth.user, 'customMemory.create', `cm:${row.id}`, String(question).slice(0, 100));
+      res.json(row);
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  app.put('/api/custom-memory/:id', requireDev, requireConfirm, (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { question, answer, tags } = req.body || {};
+      if (!question || !answer) return res.status(400).json({ error: 'question & answer wajib' });
+      const row = customMemory.update({ id, question, answer, tags: tags || '' });
+      audit.log(req.auth.user, 'customMemory.update', `cm:${id}`, String(question).slice(0, 100));
+      res.json(row);
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  app.delete('/api/custom-memory/:id', requireDev, requireConfirm, (req, res) => {
+    const id = Number(req.params.id);
+    const ok = customMemory.remove(id);
+    audit.log(req.auth.user, 'customMemory.delete', `cm:${id}`, '');
+    res.json({ ok });
+  });
   app.delete('/api/chat-log', requireDev, requireConfirm, (req, res) => {
     const deleted = chatLog.clearAll();
     audit.log(req.auth.user, 'chatLog.clearAll', 'all', `${deleted} rows`);
     res.json({ deleted });
   });
 
-  // ---- Connection (channel + 2 API key) -- read masked ----
+  // ----------- Connection (channel + 5 API key) -- read masked ----------
   app.get('/api/connection', (_req, res) => {
     const rt = runtime.readFile();
+    const masks = {};
+    for (let i = 1; i <= 5; i++) {
+      masks[`key${i}Mask`] = runtime.maskKey(process.env[`GEMINI_API_KEY_${i}`]);
+    }
     res.json({
-      channelId:    process.env.YANTO_CHANNEL_ID || '',
-      primaryMask:  runtime.maskKey(process.env.GEMINI_API_KEY_PRIMARY),
-      secondaryMask: runtime.maskKey(process.env.GEMINI_API_KEY_SECONDARY),
+      channelId: process.env.YANTO_CHANNEL_ID || '',
+      ...masks,
       hasOverrides: !!Object.keys(rt).length,
       overrideFile: 'data/runtime.json',
     });
@@ -675,22 +715,26 @@ function start() {
     try {
       const bot = require('../bot');
       const updates = {};
-      if (typeof req.body.channelId === 'string'    && req.body.channelId.trim())    updates.channelId    = req.body.channelId.trim();
-      if (typeof req.body.primaryKey === 'string'   && req.body.primaryKey.trim())   updates.primaryKey   = req.body.primaryKey.trim();
-      if (typeof req.body.secondaryKey === 'string' && req.body.secondaryKey.trim()) updates.secondaryKey = req.body.secondaryKey.trim();
+      if (typeof req.body.channelId === 'string' && req.body.channelId.trim()) {
+        updates.channelId = req.body.channelId.trim();
+      }
+      for (let i = 1; i <= 5; i++) {
+        const v = req.body[`key${i}`];
+        if (typeof v === 'string' && v.trim()) {
+          updates[`key${i}`] = v.trim();
+        }
+      }
 
       if (!Object.keys(updates).length) {
         return res.status(400).json({ error: 'minimal 1 field harus diisi' });
       }
 
-      // Step 1: Validasi tanpa modifikasi env
       const v = await bot.validateNewValues(updates);
       if (!v.ok) {
         log.warn('[connection] validasi gagal:', JSON.stringify(v.errors));
         return res.status(400).json({ ok: false, errors: v.errors });
       }
 
-      // Step 2: Apply (persist + reload validation + send hello)
       const r = await bot.applyEnvUpdate(updates);
       audit.log(req.auth.user, 'connection.update', 'runtime',
         JSON.stringify({ fields: Object.keys(updates), apiOk: r.apiOk, chOk: r.chOk }));
@@ -888,8 +932,9 @@ function start() {
   app.post('/api/maps', requireDev, requireConfirm, (req, res) => {
     const { topic, content, tags } = req.body || {};
     if (!topic || !content) return res.status(400).json({ error: 'topic & content wajib' });
-    const row = mapData.addMap({ topic, content, tags: tags || '' });
-    audit.log(req.auth.user, 'map.create', `map:${row.id}`, topic);
+    // upsert by topic (sesuai req: nama sama -> auto replace)
+    const row = mapData.upsertMap({ topic, content, tags: tags || '' });
+    audit.log(req.auth.user, 'map.upsert', `map:${row.id}`, topic);
     res.json(row);
   });
   app.put('/api/maps/:id', requireDev, requireConfirm, (req, res) => {
@@ -905,6 +950,11 @@ function start() {
     const ok = mapData.deleteMap(id);
     audit.log(req.auth.user, 'map.delete', `map:${id}`, '');
     res.json({ ok });
+  });
+  app.delete('/api/maps', requireDev, requireConfirm, (req, res) => {
+    const deleted = mapData.clearAll();
+    audit.log(req.auth.user, 'map.clearAll', 'all', `${deleted} rows`);
+    res.json({ deleted });
   });
 
   // ----------- Chat history -----------

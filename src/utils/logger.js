@@ -4,9 +4,10 @@
  * Logger 1 (Server logs).
  *
  * Sifat (req. user):
- *   - SENORMAL & SEOPTIMAL mungkin -> in-memory, FIFO 1000 entries.
- *   - Errors di-protect: kalau buffer penuh, eviction prefer non-error dulu.
- *     Errors stays sampai server restart (yang otomatis clear semua).
+ *   - Lightweight: max 5000 entries (~2-3 MB RAM hard cap).
+ *   - TTL 3 jam untuk entries non-error (di-sweep tiap 5 menit).
+ *   - Errors TIDAK PERNAH di-evict by TTL atau eviction non-error.
+ *     Errors hanya hilang saat server restart.
  *
  * Intercept console.log/warn/error/info.
  */
@@ -17,7 +18,9 @@ const bus = new EventEmitter();
 bus.setMaxListeners(50);
 
 const buffer = [];
-const MAX_BUFFER = 1000;
+const MAX_BUFFER = 5000;                   // hard cap (lightweight)
+const TTL_NON_ERROR_MS = 3 * 60 * 60 * 1000; // 3 jam untuk non-error
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;     // sweep tiap 5 menit
 let SEQ = 0;
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -106,5 +109,24 @@ function subscribe(cb) {
   bus.on('log', cb);
   return () => bus.off('log', cb);
 }
+
+// Sweep: hapus non-error yg sudah > 3 jam.
+// Errors NEVER evicted by sweep -- hanya hilang saat process exit.
+function sweep() {
+  const cutoff = Date.now() - TTL_NON_ERROR_MS;
+  let removed = 0;
+  for (let i = buffer.length - 1; i >= 0; i--) {
+    const e = buffer[i];
+    if (e.level !== 'error' && e.ts < cutoff) {
+      buffer.splice(i, 1);
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    // diam-diam, tidak emit log supaya tidak loop
+  }
+}
+const sweepTimer = setInterval(sweep, SWEEP_INTERVAL_MS);
+if (sweepTimer.unref) sweepTimer.unref();
 
 module.exports = { info, warn, error, getBuffer, getErrors, stats, subscribe };

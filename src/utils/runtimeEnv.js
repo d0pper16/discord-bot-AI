@@ -7,18 +7,37 @@ const RUNTIME_FILE = path.join(__dirname, '..', '..', 'data', 'runtime.json');
 
 const OVERRIDABLE = [
   'YANTO_CHANNEL_ID',
+  'GEMINI_API_KEY_1',
+  'GEMINI_API_KEY_2',
+  'GEMINI_API_KEY_3',
+  'GEMINI_API_KEY_4',
+  'GEMINI_API_KEY_5',
+  // Backward-compat (auto-mapped saat load):
   'GEMINI_API_KEY_PRIMARY',
   'GEMINI_API_KEY_SECONDARY',
 ];
 
 function load() {
   try {
+    // Backward-compat: kalau .env masih pakai PRIMARY/SECONDARY,
+    // map ke KEY_1/KEY_2 supaya kode baru bisa baca.
+    if (!process.env.GEMINI_API_KEY_1 && process.env.GEMINI_API_KEY_PRIMARY) {
+      process.env.GEMINI_API_KEY_1 = process.env.GEMINI_API_KEY_PRIMARY;
+    }
+    if (!process.env.GEMINI_API_KEY_2 && process.env.GEMINI_API_KEY_SECONDARY) {
+      process.env.GEMINI_API_KEY_2 = process.env.GEMINI_API_KEY_SECONDARY;
+    }
+
     if (!fs.existsSync(RUNTIME_FILE)) return {};
     const j = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8')) || {};
     for (const k of OVERRIDABLE) {
       if (typeof j[k] === 'string' && j[k].trim()) {
         process.env[k] = j[k].trim();
       }
+    }
+    // Re-map sekali lagi setelah override runtime
+    if (!process.env.GEMINI_API_KEY_1 && process.env.GEMINI_API_KEY_PRIMARY) {
+      process.env.GEMINI_API_KEY_1 = process.env.GEMINI_API_KEY_PRIMARY;
     }
     return j;
   } catch (e) {

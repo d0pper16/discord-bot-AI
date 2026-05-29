@@ -5,29 +5,53 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('../db/database');
 
 /**
- * Layanan Gemini.
- * - PRIMARY selalu didahulukan; SECONDARY fallback.
- * - Hitung RPM/RPD per key di tabel api_usage.
- * - Mendukung "reserveTokens": N kuota terakhir/menit DICADANGKAN
- *   khusus untuk pemanggilan dengan opsi { allowReserve: true }
- *   (dipakai setelah bot kasih balasan "sabar ya kak..." di rate-limit).
+ * Layanan Gemini multi-key (1-5 keys).
+ *
+ * Slot key:
+ *   GEMINI_API_KEY_1 .. GEMINI_API_KEY_5  (KEY_1 selalu dipakai duluan)
+ *   Backward-compat: PRIMARY -> KEY_1, SECONDARY -> KEY_2 (di-map di runtimeEnv.load).
+ *
+ * Per-key state:
+ *   { cooldownUntil, lastError, lastValidated, banned, lastSuccess }
+ *
+ * Auto-refresh: 1× per menit, round-robin (1 key per cycle).
+ *   Dengan 5 keys, tiap key divalidasi setiap ~5 menit (hemat token,
+ *   tetap meet req. user "validasi setiap 1 menit" di level overall scheduler).
  */
 
 const cfgPath = path.join(__dirname, '..', '..', 'config.json');
-
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
   return require(cfgPath);
 }
 
-const KEYS = () => ({
-  PRIMARY:   process.env.GEMINI_API_KEY_PRIMARY,
-  SECONDARY: process.env.GEMINI_API_KEY_SECONDARY,
-});
+function loadKeys() {
+  const out = [];
+  for (let i = 1; i <= 5; i++) {
+    const v = process.env[`GEMINI_API_KEY_${i}`];
+    if (v && v.trim() && !v.startsWith('AIzaSyXX')) {
+      out.push({ id: `KEY_${i}`, num: i, key: v.trim() });
+    }
+  }
+  return out;
+}
+
 const MODEL = () => process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
-const cooldownUntil = { PRIMARY: 0, SECONDARY: 0 };
+const keyState = {}; // 'KEY_1': { cooldownUntil, lastError, lastValidated, banned, lastSuccess }
 let LAST_USED_KEY = null;
+let LAST_USED_NUM = null;
+
+function ensureState(id) {
+  if (!keyState[id]) keyState[id] = {
+    cooldownUntil: 0,
+    lastError: null,
+    lastValidated: 0,
+    banned: false,
+    lastSuccess: 0,
+  };
+  return keyState[id];
+}
 
 const stmtCount = db.prepare(
   `SELECT COUNT(*) AS c FROM api_usage WHERE api_key_id = ? AND used_at >= ?`
@@ -48,8 +72,9 @@ function usageOf(keyId) {
 
 function isAvailable(keyId, allowReserve = false) {
   const cfg = loadCfg();
-  if (!KEYS()[keyId]) return false;
-  if (Date.now() < cooldownUntil[keyId]) return false;
+  const state = ensureState(keyId);
+  if (state.banned) return false;
+  if (Date.now() < state.cooldownUntil) return false;
   const u = usageOf(keyId);
   const reserve = Math.max(0, Number(cfg.gemini.reserveTokens || 0));
   const ceiling = allowReserve
@@ -62,32 +87,30 @@ function isAvailable(keyId, allowReserve = false) {
 
 function isRateLimitErr(err) {
   const msg = String(err && (err.message || err)).toLowerCase();
-  return (
-    msg.includes('429') ||
-    msg.includes('rate') ||
-    msg.includes('quota') ||
-    msg.includes('exceed') ||
-    msg.includes('resource_exhausted')
-  );
+  return /\b429\b|rate|quota|exceed|resource_exhausted/.test(msg);
 }
 
-async function callOnce(keyId, prompt, history = []) {
-  const apiKey = KEYS()[keyId];
+function isAuthErr(err) {
+  const msg = String(err && (err.message || err)).toLowerCase();
+  return /\b401\b|\b403\b|invalid api key|api[\s_]key.*invalid|permission_denied|unauthenticated|api[_\s]key[_\s]not[_\s]valid|forbidden/.test(msg);
+}
+
+async function callOnce(keyId, apiKey, prompt, history = []) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: MODEL() });
 
   const chat = model.startChat({
     history: history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
-    generationConfig: {
-      temperature: 0.85,
-      topP: 0.9,
-      maxOutputTokens: 1024,
-    },
+    generationConfig: { temperature: 0.85, topP: 0.9, maxOutputTokens: 1024 },
   });
 
   const res = await chat.sendMessage(prompt);
   const text = res.response.text();
   stmtLog.run(keyId, 'ok');
+  const state = ensureState(keyId);
+  state.lastSuccess = Date.now();
+  state.lastError = null;
+  state.banned = false;
   return text;
 }
 
@@ -99,69 +122,163 @@ async function callOnce(keyId, prompt, history = []) {
 async function generate(prompt, history = [], opts = {}) {
   const cfg = loadCfg();
   const allowReserve = !!opts.allowReserve;
+  const keys = loadKeys();
+  if (!keys.length) {
+    const e = new Error('Tidak ada Gemini API key yang ter-konfigurasi (GEMINI_API_KEY_1..5).');
+    e.code = 'NO_KEY';
+    throw e;
+  }
 
   let lastErr = null;
-  for (const keyId of ['PRIMARY', 'SECONDARY']) {
-    if (!isAvailable(keyId, allowReserve)) continue;
+  for (const k of keys) {
+    if (!isAvailable(k.id, allowReserve)) continue;
     try {
-      const text = await callOnce(keyId, prompt, history);
-      LAST_USED_KEY = keyId;
-      return { text, keyUsed: keyId };
+      const text = await callOnce(k.id, k.key, prompt, history);
+      LAST_USED_KEY = k.id;
+      LAST_USED_NUM = k.num;
+      return { text, keyUsed: k.id, keyNum: k.num };
     } catch (err) {
       lastErr = err;
-      stmtLog.run(keyId, 'err');
+      stmtLog.run(k.id, 'err');
+      const state = ensureState(k.id);
+      state.lastError = { msg: err.message, ts: Date.now() };
       if (isRateLimitErr(err)) {
-        cooldownUntil[keyId] = Date.now() + cfg.gemini.cooldownMs;
-        console.warn(`[gemini] ${keyId} rate-limited, cooldown ${cfg.gemini.cooldownMs}ms`);
+        state.cooldownUntil = Date.now() + cfg.gemini.cooldownMs;
+        console.warn(`[gemini] ${k.id} rate-limited, cooldown ${cfg.gemini.cooldownMs}ms`);
+        continue;
+      }
+      if (isAuthErr(err)) {
+        state.banned = true;
+        console.error(`[gemini] ${k.id} BANNED/INVALID: ${err.message}`);
         continue;
       }
       throw err;
     }
   }
 
-  // Tidak ada key tersedia -> lempar error rate-limit terstandar
-  const e = new Error(lastErr ? lastErr.message : 'RATE_LIMIT: semua API Gemini sedang habis kuota / cooldown');
+  const e = new Error(lastErr ? lastErr.message : 'RATE_LIMIT: semua API Gemini habis kuota / cooldown / banned');
   e.code = 'RATE_LIMIT';
   throw e;
 }
 
 /**
- * Validasi token Gemini saat startup.
- * Mencoba 1 panggilan kecil (TIDAK dihitung di api_usage internal).
+ * Validate satu key (cheap call).
+ */
+async function validateKey({ id, key }) {
+  const state = ensureState(id);
+  try {
+    const ai = new GoogleGenerativeAI(key);
+    const m = ai.getGenerativeModel({ model: MODEL() });
+    const r = await m.generateContent('hi');
+    r.response.text();
+    state.lastValidated = Date.now();
+    state.banned = false;
+    state.lastError = null;
+    return { ok: true };
+  } catch (err) {
+    state.lastError = { msg: err.message, ts: Date.now() };
+    if (isAuthErr(err)) state.banned = true;
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Cold-start validation: cek key pertama yang available.
  */
 async function validate() {
-  for (const keyId of ['PRIMARY', 'SECONDARY']) {
-    const apiKey = KEYS()[keyId];
-    if (!apiKey) continue;
-    try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: MODEL() });
-      const r = await model.generateContent('ok');
-      r.response.text();
-      return { ok: true, keyId };
-    } catch (err) {
-      console.warn(`[gemini.validate] ${keyId} gagal: ${err.message}`);
-    }
+  const keys = loadKeys();
+  for (const k of keys) {
+    const r = await validateKey(k);
+    if (r.ok) return { ok: true, keyId: k.id, keyNum: k.num };
   }
   return { ok: false };
 }
 
+// ===== Auto-refresh round-robin per 1 menit =====
+let refreshIdx = 0;
+let refreshTimer = null;
+
+async function refreshTick() {
+  const keys = loadKeys();
+  if (!keys.length) return;
+  const k = keys[refreshIdx % keys.length];
+  refreshIdx++;
+  const r = await validateKey(k);
+  if (!r.ok) {
+    console.warn(`[gemini.refresh] ${k.id} (API ke-${k.num}) error: ${r.error}`);
+  }
+}
+
+function startAutoRefresh() {
+  if (refreshTimer) return;
+  // First tick after 30 detik biar tidak race dengan cold-start validate
+  setTimeout(() => {
+    refreshTick().catch(() => {});
+    refreshTimer = setInterval(() => refreshTick().catch(() => {}), 60 * 1000);
+    if (refreshTimer.unref) refreshTimer.unref();
+  }, 30 * 1000);
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
+}
+
 function status() {
   const cfg = loadCfg();
+  const keys = loadKeys();
+  const perKey = keys.map((k) => {
+    const state = ensureState(k.id);
+    const usage = usageOf(k.id);
+    let statusLabel = 'ok';
+    if (state.banned) statusLabel = 'banned';
+    else if (Date.now() < state.cooldownUntil) statusLabel = 'cooldown';
+    else if (state.lastError && (Date.now() - state.lastError.ts) < 5 * 60 * 1000) statusLabel = 'recent-error';
+    else if (state.lastValidated && (Date.now() - state.lastValidated) < 10 * 60 * 1000) statusLabel = 'validated';
+    return {
+      id: k.id,
+      num: k.num,
+      configured: true,
+      rpm: usage.rpm,
+      rpd: usage.rpd,
+      cooldownMs: Math.max(0, state.cooldownUntil - Date.now()),
+      banned: state.banned,
+      lastError: state.lastError,
+      lastValidated: state.lastValidated,
+      lastSuccess: state.lastSuccess,
+      status: statusLabel,
+    };
+  });
+
+  // Slot 1-5 (kosong tampilkan sebagai unconfigured)
+  const slots = [];
+  for (let i = 1; i <= 5; i++) {
+    const found = perKey.find((p) => p.num === i);
+    if (found) slots.push(found);
+    else slots.push({ id: `KEY_${i}`, num: i, configured: false, status: 'empty' });
+  }
+
   return {
-    primary: {
-      configured: !!KEYS().PRIMARY,
-      cooldownMs: Math.max(0, cooldownUntil.PRIMARY - Date.now()),
-      ...usageOf('PRIMARY'),
-    },
-    secondary: {
-      configured: !!KEYS().SECONDARY,
-      cooldownMs: Math.max(0, cooldownUntil.SECONDARY - Date.now()),
-      ...usageOf('SECONDARY'),
-    },
+    keysConfigured: keys.length,
+    activeKey: LAST_USED_KEY,
+    activeKeyNum: LAST_USED_NUM,
+    keys: slots,
+    totalRpm: perKey.reduce((s, k) => s + k.rpm, 0),
+    totalRpd: perKey.reduce((s, k) => s + k.rpd, 0),
+    rpmBudget: keys.length * cfg.gemini.rpmLimit,
+    rpdBudget: keys.length * cfg.gemini.rpdLimit,
     model: MODEL(),
     reserveTokens: cfg.gemini.reserveTokens || 0,
   };
 }
 
-module.exports = { generate, validate, status, lastUsedKey: () => LAST_USED_KEY };
+module.exports = {
+  generate,
+  validate,
+  validateKey,
+  startAutoRefresh,
+  stopAutoRefresh,
+  status,
+  lastUsedKey: () => LAST_USED_KEY,
+  lastUsedNum: () => LAST_USED_NUM,
+};

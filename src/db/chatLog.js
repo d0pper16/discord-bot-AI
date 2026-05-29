@@ -67,4 +67,13 @@ function clearAll() {
   return stmt.clearAll.run().changes;
 }
 
-module.exports = { add, list, search, count, clearAll };
+function topUsers(limit = 10) {
+  return db.prepare(
+    `SELECT username, discord_id, COUNT(*) AS count, MAX(asked_at) AS last_asked
+     FROM chat_log
+     GROUP BY username, discord_id
+     ORDER BY count DESC LIMIT ?`
+  ).all(Math.min(Math.max(Number(limit) || 10, 1), 50));
+}
+
+module.exports = { add, list, search, count, clearAll, topUsers };

@@ -86,6 +86,22 @@ BEGIN
     SELECT id FROM chat_log ORDER BY id DESC LIMIT 1000
   );
 END;
+
+-- ============================================================
+--  CUSTOM MEMORY (ingatan buatan dari dashboard)
+--  Q&A pasangan yang ditambahkan manual oleh dev/admin.
+--  Bot pakai ini SEBELUM cek cache & Gemini.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS custom_memory (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  question      TEXT    NOT NULL,
+  question_norm TEXT    NOT NULL,
+  answer        TEXT    NOT NULL,
+  tags          TEXT    DEFAULT '',
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_custmem_norm ON custom_memory(question_norm);
 `);
 
 module.exports = db;

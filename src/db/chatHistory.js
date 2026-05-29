@@ -129,6 +129,17 @@ function clearAll() {
   return stmt.clearAll.run().changes;
 }
 
+/**
+ * Hapus cache entries yg tidak pernah diakses dalam N hari terakhir.
+ * Pakai updated_at sebagai indikator "last touched" (akan di-update
+ * saat replace pada follow-up).
+ */
+function cleanupOlderThanDays(days = 30) {
+  const cutoff = Math.floor(Date.now() / 1000) - (days * 86400);
+  const r = db.prepare('DELETE FROM chat_history WHERE updated_at < ?').run(cutoff);
+  return r.changes;
+}
+
 module.exports = {
   normalize,
   jaccard,
@@ -143,4 +154,5 @@ module.exports = {
   searchHistory,
   deleteEntry,
   clearAll,
+  cleanupOlderThanDays,
 };

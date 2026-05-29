@@ -33,10 +33,12 @@ $$('nav.tabs button').forEach(btn => {
     $('#tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'audit')      loadAudit();
     if (btn.dataset.tab === 'logs')       resumeLogPolling();
-    if (btn.dataset.tab === 'chatlog')    loadChatLog();
+    if (btn.dataset.tab === 'chatlog')    { loadChatLog(); loadChatStats(); }
+    if (btn.dataset.tab === 'custmem')    loadCustomMemory();
     if (btn.dataset.tab === 'connection') loadConnection();
     if (btn.dataset.tab === 'monitor')    refreshSystem(true);
     if (btn.dataset.tab === 'roblox')     refreshRoblox(true);
+    if (btn.dataset.tab === 'maps')       loadMaps();
   });
 });
 
@@ -191,11 +193,12 @@ async function refreshStatus() {
   try {
     const r = await fetch('/api/status').then(r => r.json());
     const g = r.gemini;
-    const last = g.lastUsedKey ? ` (active: ${g.lastUsedKey})` : '';
+    const apiActive = g.activeKeyNum ? `API ke-${g.activeKeyNum}` : '-';
     $('#status').textContent =
       `Channel  : ${r.env.channelId || '-'}\n` +
-      `Model    : ${r.env.model}${last}\n` +
-      `Reserve  : ${g.reserveTokens || 0} token`;
+      `Model    : ${r.env.model}\n` +
+      `Active   : ${apiActive}  (keys configured: ${g.keysConfigured}/5)\n` +
+      `Total RPM: ${g.totalRpm} / ${g.rpmBudget}  |  RPD: ${g.totalRpd} / ${g.rpdBudget}`;
   } catch (e) { $('#status').textContent = 'status err: ' + e.message; }
 }
 setInterval(refreshStatus, 10000);
@@ -252,18 +255,38 @@ async function refreshSystem(force = false) {
     $('#m-rss').innerHTML = fmtBytes(r.memory.process.rss);
     $('#m-proc-detail').textContent =
       `pid ${r.proc.pid} - node ${r.proc.node} - ${r.proc.platform} - heap ${fmtBytes(r.memory.process.heapUsed)}/${fmtBytes(r.memory.process.heapTotal)}`;
-    // Gemini
-    const last = r.gemini.lastUsedKey;
-    $('#prim-rpm').textContent = r.gemini.primary.rpm;
-    $('#prim-rpd').textContent = r.gemini.primary.rpd;
-    $('#prim-cd').textContent  = r.gemini.primary.cooldownMs > 0 ? `${(r.gemini.primary.cooldownMs/1000).toFixed(0)}s` : 'idle';
-    $('#sec-rpm').textContent = r.gemini.secondary.rpm;
-    $('#sec-rpd').textContent = r.gemini.secondary.rpd;
-    $('#sec-cd').textContent  = r.gemini.secondary.cooldownMs > 0 ? `${(r.gemini.secondary.cooldownMs/1000).toFixed(0)}s` : 'idle';
-    $('#prim-badge').hidden = last !== 'PRIMARY';
-    $('#sec-badge').hidden  = last !== 'SECONDARY';
-    $('#api-primary').classList.toggle('api-active', last === 'PRIMARY');
-    $('#api-secondary').classList.toggle('api-active', last === 'SECONDARY');
+    // Gemini per-key status (5 slots)
+    const g = r.gemini;
+    if (g && Array.isArray(g.keys) && g.keys.length === 5 && $('#api-grid')) {
+      $('#api-grid').innerHTML = g.keys.map((k) => {
+        if (!k.configured) {
+          return `
+            <div class="metric-card api-card">
+              <div class="metric-label">API ke-${k.num} <span style="color:var(--text-dim);font-size:10px">empty</span></div>
+              <div class="metric-sub" style="text-align:center;padding:8px 0">slot kosong</div>
+            </div>`;
+        }
+        const active = g.activeKey === k.id;
+        const badge = active ? '<span class="badge-active">active</span>'
+                    : k.banned ? '<span style="background:var(--danger);color:white;padding:1px 6px;border-radius:3px;font-size:10px">banned</span>'
+                    : k.cooldownMs > 0 ? `<span style="background:var(--warning);color:#1e293b;padding:1px 6px;border-radius:3px;font-size:10px">cooldown ${(k.cooldownMs/1000).toFixed(0)}s</span>`
+                    : k.lastError ? '<span style="background:var(--warning);color:#1e293b;padding:1px 6px;border-radius:3px;font-size:10px">error</span>'
+                    : '<span style="background:var(--success);color:white;padding:1px 6px;border-radius:3px;font-size:10px">ok</span>';
+        return `
+          <div class="metric-card api-card${active ? ' api-active' : ''}">
+            <div class="metric-label">API ke-${k.num} ${badge}</div>
+            <div class="metric-row"><span>RPM</span><b>${k.rpm}</b></div>
+            <div class="metric-row"><span>RPD</span><b>${k.rpd}</b></div>
+            ${k.lastError ? `<div class="metric-sub" style="color:var(--danger);font-size:10px">${esc(k.lastError.msg.slice(0, 60))}</div>` : ''}
+          </div>`;
+      }).join('');
+    }
+    if ($('#api-summary')) {
+      $('#api-summary').textContent =
+        `Total RPM: ${g.totalRpm} / ${g.rpmBudget} (sisa ${g.rpmBudget - g.totalRpm}). ` +
+        `Total RPD: ${g.totalRpd} / ${g.rpdBudget} (sisa ${g.rpdBudget - g.totalRpd}). ` +
+        `Active: ${g.activeKeyNum ? 'API ke-' + g.activeKeyNum : '-'}.`;
+    }
   } catch (e) { /* swallow */ }
 }
 setInterval(() => refreshSystem(false), 5000);
@@ -336,10 +359,13 @@ async function loadConnection() {
     $('#conn-channel-cur').textContent = r.channelId
       ? `Aktif: ${r.channelId}`
       : 'Belum di-set. Bot akan TIDUR sampai ini diisi.';
-    $('#conn-primary-cur').textContent  = r.primaryMask  ? `Aktif: ${r.primaryMask}`  : 'Belum di-set.';
-    $('#conn-secondary-cur').textContent = r.secondaryMask ? `Aktif: ${r.secondaryMask}` : 'Belum di-set.';
-    $('#conn-primary').value = '';
-    $('#conn-secondary').value = '';
+    for (let i = 1; i <= 5; i++) {
+      const inp  = $(`#conn-key${i}`);
+      const cur  = $(`#conn-key${i}-cur`);
+      if (inp) inp.value = '';
+      const mask = r[`key${i}Mask`];
+      if (cur) cur.textContent = mask ? `Aktif: ${mask}` : 'Slot kosong (tidak ter-konfigurasi)';
+    }
     $('#conn-errors').hidden = true;
   } catch (e) { console.error(e); }
 }
@@ -349,16 +375,16 @@ $('#conn-form').onsubmit = async (e) => {
   if (ROLE !== 'dev') { alert('Akun admin read-only.'); return; }
   const payload = {};
   const ch = $('#conn-channel').value.trim();
-  const pk = $('#conn-primary').value.trim();
-  const sk = $('#conn-secondary').value.trim();
-  if (ch) payload.channelId    = ch;
-  if (pk) payload.primaryKey   = pk;
-  if (sk) payload.secondaryKey = sk;
+  if (ch) payload.channelId = ch;
+  for (let i = 1; i <= 5; i++) {
+    const v = $(`#conn-key${i}`).value.trim();
+    if (v) payload[`key${i}`] = v;
+  }
   if (!Object.keys(payload).length) { alert('Tidak ada perubahan.'); return; }
 
   $('#conn-errors').hidden = true;
   const ok = await jsonWrite('PUT', '/api/connection', payload,
-    'Yakin update connection? Server akan VALIDASI dulu sebelum save. Jika valid, bot akan ucap "hello" di channel.');
+    'Yakin update connection? Server akan VALIDASI tiap key sebelum save. Jika valid, bot akan ucap "hello" di channel.');
   if (!ok) return;
   if (ok.status === 400) {
     const data = await ok.json();
@@ -419,8 +445,21 @@ $('#map-form').onsubmit = async (e) => {
   const url = id ? '/api/maps/' + id : '/api/maps';
   const method = id ? 'PUT' : 'POST';
   const ok = await jsonWrite(method, url, data,
-    id ? `Yakin update map id=${id}?` : 'Yakin tambah map baru?');
+    id ? `Yakin update map id=${id}?` : `Yakin simpan map "${data.topic}"? (auto-replace kalau topic sama sudah ada)`);
   if (ok) { fillMapForm({}); loadMaps(); }
+};
+$('#map-clear-all').onclick = async () => {
+  const yes = await askYesNo(
+    'Yakin HAPUS SEMUA MAP? DB jadi kosong. Bot akan respon "database kosong" utk pertanyaan map spesifik (Roblox umum tetap dijawab).',
+    'Kosongkan DB Map'
+  );
+  if (!yes) return;
+  const ok = await jsonWrite('DELETE', '/api/maps', {}, 'Konfirmasi: hapus semua map.');
+  if (ok) {
+    const d = await ok.json();
+    alert(`${d.deleted} map dihapus. DB sekarang kosong.`);
+    loadMaps();
+  }
 };
 loadMaps();
 
@@ -964,8 +1003,38 @@ $('#db-import-form').onsubmit = async (e) => {
 loadFiles();
 
 // =================================================================
-//  CHAT LOG (Logger 2 - persisten SQLite)
+//  CHAT LOG + Top 10 Chart (req. user)
 // =================================================================
+async function loadChatStats() {
+  try {
+    const data = await fetch('/api/chat-stats').then(r => r.json());
+    const wrap = $('#chatlog-chart');
+    if (!data.topUsers || !data.topUsers.length) {
+      wrap.innerHTML = '<div class="hint">Belum ada chat log. Top 10 akan muncul setelah ada pertanyaan.</div>';
+      return;
+    }
+    const max = Math.max(...data.topUsers.map(u => u.count));
+    wrap.innerHTML = data.topUsers.map((u, i) => {
+      const pct = max > 0 ? (u.count / max) * 100 : 0;
+      const lastDt = u.last_asked ? new Date(u.last_asked * 1000) : null;
+      const lastStr = lastDt ? lastDt.toISOString().slice(0, 16).replace('T', ' ') : '-';
+      return `
+        <div class="chart-row">
+          <div class="chart-rank">#${i + 1}</div>
+          <div class="chart-name">
+            <b>${esc(u.username)}</b>
+            <small><code>${esc(u.discord_id)}</code></small>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar" style="width:${pct.toFixed(1)}%"></div>
+            <span class="chart-count">${u.count} pertanyaan</span>
+          </div>
+          <div class="chart-meta"><small>terakhir: ${lastStr}</small></div>
+        </div>`;
+    }).join('');
+  } catch (e) { console.error(e); }
+}
+
 async function loadChatLog(q = '') {
   const url = '/api/chat-log?limit=500' + (q ? '&q=' + encodeURIComponent(q) : '');
   const data = await fetch(url).then(r => r.json());
@@ -996,7 +1065,7 @@ $('#chatlog-search').addEventListener('input', (e) => {
   clearTimeout(chatlogTimer);
   chatlogTimer = setTimeout(() => loadChatLog(e.target.value.trim()), 250);
 });
-$('#chatlog-refresh').onclick = () => loadChatLog($('#chatlog-search').value);
+$('#chatlog-refresh').onclick = () => { loadChatLog($('#chatlog-search').value); loadChatStats(); };
 $('#chatlog-clear').onclick = async () => {
   const yes = await askYesNo(
     'Yakin hapus SEMUA chat log? Persistent data di SQLite akan dihapus permanen. Tindakan ini tidak bisa di-undo.',
@@ -1008,9 +1077,80 @@ $('#chatlog-clear').onclick = async () => {
     const d = await ok.json();
     alert(`${d.deleted} entries dihapus.`);
     loadChatLog();
+    loadChatStats();
   }
 };
 loadChatLog();
+loadChatStats();
+
+// =================================================================
+//  CUSTOM MEMORY (Ingatan Buatan)
+// =================================================================
+let CUSTMEM_ROWS = [];
+
+async function loadCustomMemory(q = '') {
+  const url = '/api/custom-memory' + (q ? '?q=' + encodeURIComponent(q) : '');
+  const data = await fetch(url).then(r => r.json());
+  CUSTMEM_ROWS = data.entries || [];
+  const tbody = $('#custmem-table tbody');
+  tbody.innerHTML = '';
+  CUSTMEM_ROWS.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.id}</td>
+      <td><div class="cell">${esc(r.question)}</div></td>
+      <td><div class="cell">${esc((r.answer || '').slice(0, 250))}${r.answer && r.answer.length > 250 ? '...' : ''}</div></td>
+      <td>${esc(r.tags || '')}</td>
+      <td class="act">
+        <button class="secondary" data-edit="${r.id}">Edit</button>
+        <button class="danger writer" data-del="${r.id}" ${ROLE !== 'dev' ? 'disabled' : ''}>Hapus</button>
+      </td>`;
+    tr.querySelector('[data-edit]').onclick = () => fillCustMemForm(r);
+    const del = tr.querySelector('[data-del]');
+    if (del) del.onclick = async () => {
+      const ok = await jsonWrite('DELETE', `/api/custom-memory/${r.id}`, {},
+        `Yakin hapus ingatan buatan id=${r.id}?`);
+      if (ok) loadCustomMemory($('#custmem-search').value);
+    };
+    tbody.appendChild(tr);
+  });
+  $('#custmem-count').textContent = `${CUSTMEM_ROWS.length} ingatan / ${data.total} total`;
+}
+function fillCustMemForm(r) {
+  const f = $('#custmem-form');
+  f.id.value       = r.id || '';
+  f.question.value = r.question || '';
+  f.answer.value   = r.answer || '';
+  f.tags.value     = r.tags || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+$('#custmem-reset').onclick = () => fillCustMemForm({});
+$('#custmem-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const data = {
+    question: f.question.value.trim(),
+    answer:   f.answer.value.trim(),
+    tags:     f.tags.value.trim(),
+  };
+  if (!data.question || !data.answer) { alert('Pertanyaan & jawaban wajib.'); return; }
+  const id = f.id.value;
+  const url = id ? `/api/custom-memory/${id}` : '/api/custom-memory';
+  const method = id ? 'PUT' : 'POST';
+  const ok = await jsonWrite(method, url, data,
+    id ? `Yakin update ingatan buatan id=${id}?` : 'Yakin tambah ingatan buatan baru?');
+  if (ok) {
+    fillCustMemForm({});
+    loadCustomMemory($('#custmem-search').value);
+  }
+};
+let custmemTimer = null;
+$('#custmem-search').addEventListener('input', (e) => {
+  clearTimeout(custmemTimer);
+  custmemTimer = setTimeout(() => loadCustomMemory(e.target.value.trim()), 250);
+});
+$('#custmem-refresh').onclick = () => loadCustomMemory($('#custmem-search').value);
+loadCustomMemory();
 
 // =================================================================
 //  Helpers

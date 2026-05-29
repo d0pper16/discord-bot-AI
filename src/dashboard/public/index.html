@@ -38,6 +38,7 @@
   <button data-tab="audit">Audit Log</button>
   <button data-tab="logs">Server Logs</button>
   <button data-tab="chatlog">Chat Log</button>
+  <button data-tab="custmem">Ingatan Buatan</button>
   <button data-tab="db">Backup DB</button>
 </nav>
 
@@ -71,21 +72,9 @@
     </div>
   </div>
 
-  <h3 style="margin-top:24px">Gemini API Usage</h3>
-  <div class="metrics-grid">
-    <div class="metric-card api-card" id="api-primary">
-      <div class="metric-label">PRIMARY <span class="badge-active" id="prim-badge" hidden>active</span></div>
-      <div class="metric-row"><span>RPM</span><b id="prim-rpm">--</b></div>
-      <div class="metric-row"><span>RPD</span><b id="prim-rpd">--</b></div>
-      <div class="metric-row"><span>Cooldown</span><b id="prim-cd">--</b></div>
-    </div>
-    <div class="metric-card api-card" id="api-secondary">
-      <div class="metric-label">SECONDARY <span class="badge-active" id="sec-badge" hidden>active</span></div>
-      <div class="metric-row"><span>RPM</span><b id="sec-rpm">--</b></div>
-      <div class="metric-row"><span>RPD</span><b id="sec-rpd">--</b></div>
-      <div class="metric-row"><span>Cooldown</span><b id="sec-cd">--</b></div>
-    </div>
-  </div>
+  <h3 style="margin-top:24px">Gemini API (5 slot)</h3>
+  <p class="hint" id="api-summary"></p>
+  <div id="api-grid" class="metrics-grid"></div>
 </section>
 
 <!-- ====== ROBLOX WATCHER ====== -->
@@ -148,16 +137,31 @@
       <small id="conn-channel-cur" class="hint"></small>
     </label>
 
-    <label>
-      Primary API Gemini <small>(prioritas utama)</small>
-      <input id="conn-primary" type="password" placeholder="masukkan key baru, atau biarkan kosong utk tidak ubah" class="writer-input" autocomplete="off">
-      <small id="conn-primary-cur" class="hint"></small>
-    </label>
+    <p class="hint" style="margin:14px 0 4px">
+      <b>5 slot Gemini API Key</b> (min 1 wajib, sisanya opsional fallback berurutan).
+      Bot pakai <b>API ke-1 dulu</b>, switch ke ke-2 kalau limit, dst.
+      Kosongin field = pakai value yang sudah ada.
+    </p>
 
-    <label>
-      Secondary API Gemini <small>(fallback)</small>
-      <input id="conn-secondary" type="password" placeholder="masukkan key baru, atau biarkan kosong utk tidak ubah" class="writer-input" autocomplete="off">
-      <small id="conn-secondary-cur" class="hint"></small>
+    <label>API Key 1 <small>(WAJIB - prioritas pertama)</small>
+      <input id="conn-key1" type="password" placeholder="masukkan key baru, atau kosongin = tetap" class="writer-input" autocomplete="off">
+      <small id="conn-key1-cur" class="hint"></small>
+    </label>
+    <label>API Key 2 <small>(opsional - fallback ke-2)</small>
+      <input id="conn-key2" type="password" placeholder="..." class="writer-input" autocomplete="off">
+      <small id="conn-key2-cur" class="hint"></small>
+    </label>
+    <label>API Key 3 <small>(opsional - fallback ke-3)</small>
+      <input id="conn-key3" type="password" placeholder="..." class="writer-input" autocomplete="off">
+      <small id="conn-key3-cur" class="hint"></small>
+    </label>
+    <label>API Key 4 <small>(opsional - fallback ke-4)</small>
+      <input id="conn-key4" type="password" placeholder="..." class="writer-input" autocomplete="off">
+      <small id="conn-key4-cur" class="hint"></small>
+    </label>
+    <label>API Key 5 <small>(opsional - fallback ke-5)</small>
+      <input id="conn-key5" type="password" placeholder="..." class="writer-input" autocomplete="off">
+      <small id="conn-key5-cur" class="hint"></small>
     </label>
 
     <div id="conn-errors" class="cache-info cache-over" hidden></div>
@@ -167,7 +171,7 @@
       <button type="button" id="conn-reload" class="secondary">Muat Ulang</button>
     </div>
     <p class="hint">
-      Server akan VALIDASI dulu sebelum save. Kalau valid: bot akan ucap <b>hello</b> di channel.
+      Server VALIDASI dulu setiap key yang diisi sebelum save. Kalau valid: bot ucap <b>hello</b> di channel.
       Kalau gagal: pesan error per-field, runtime.json TIDAK diubah.
     </p>
   </form>
@@ -190,6 +194,10 @@
     <thead><tr><th>ID</th><th>Topik</th><th>Tag</th><th>Aksi</th></tr></thead>
     <tbody></tbody>
   </table>
+  <div class="row writer" style="margin-top:8px">
+    <button id="map-clear-all" class="danger">Hapus Semua Map (kosongkan DB)</button>
+    <small class="hint" style="margin:0">Bot akan respon "database kosong" untuk pertanyaan map spesifik. Roblox umum tetap dijawab.</small>
+  </div>
 </section>
 
 <!-- ====== PERSONALITY (overlay-only, additive) ====== -->
@@ -434,6 +442,13 @@
     <button id="chatlog-clear" class="danger writer">Hapus Semua</button>
     <span id="chatlog-count" class="hint"></span>
   </div>
+
+  <!-- Top 10 user chart -->
+  <div class="card" style="margin-bottom:14px">
+    <h3>Top 10 Penanya</h3>
+    <div id="chatlog-chart" class="chatlog-chart"><div class="hint">memuat...</div></div>
+  </div>
+
   <div class="history-scroll">
     <table id="chatlog-table">
       <thead>
@@ -447,6 +462,51 @@
           <th>Sumber</th>
         </tr>
       </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ====== INGATAN BUATAN (Custom Memory) ====== -->
+<section id="tab-custmem" class="tab">
+  <h2>Ingatan Buatan <small style="color:var(--text-muted);font-weight:400">(Q&amp;A pasangan custom dari dashboard)</small></h2>
+  <p class="hint">
+    Tambahkan pasangan pertanyaan-jawaban yang akan dipakai bot SEBELUM ke cache/Gemini.
+    Bot mencocokkan dengan similarity (Jaccard) >= 0.85.
+    <br><b>Format placeholder yang bisa dipakai di jawaban:</b>
+    <code>{nama}</code> -> nama bot.
+    <code>&lt;@123456789&gt;</code> -> tag user (pakai Discord User ID).
+    <code>&lt;@&amp;987654321&gt;</code> -> tag role (Discord Role ID).
+    <br>Contoh:
+    <br>Q: <code>{nama} siapa pembuatmu?</code>
+    <br>A: <code>pembuatku adalah &lt;@d0pper_user_id&gt;, salah satu admin di server ini</code>
+  </p>
+
+  <form id="custmem-form" class="card writer">
+    <input type="hidden" name="id" />
+    <label>Pertanyaan
+      <textarea name="question" rows="2" maxlength="1000" placeholder="{nama} siapa pembuatmu?" required></textarea>
+    </label>
+    <label>Jawaban
+      <textarea name="answer" rows="3" maxlength="4000" placeholder="pembuatku adalah d0pper, admin server ini" required></textarea>
+    </label>
+    <label>Tag (pisah koma, opsional)
+      <input name="tags" placeholder="creator, admin, faq">
+    </label>
+    <div class="row">
+      <button type="submit">Simpan</button>
+      <button type="button" id="custmem-reset" class="secondary">Reset Form</button>
+    </div>
+  </form>
+
+  <div class="history-toolbar">
+    <input id="custmem-search" type="text" placeholder="cari pertanyaan / jawaban / tag...">
+    <button id="custmem-refresh" class="secondary">Refresh</button>
+    <span id="custmem-count" class="hint"></span>
+  </div>
+  <div class="history-scroll">
+    <table id="custmem-table">
+      <thead><tr><th>ID</th><th>Pertanyaan</th><th>Jawaban</th><th>Tag</th><th>Aksi</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>

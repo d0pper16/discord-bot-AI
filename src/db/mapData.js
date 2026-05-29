@@ -23,6 +23,23 @@ function getMap(id) {
   return stmt.get.get(id);
 }
 
+/**
+ * UPSERT by topic (case-insensitive). Kalau sudah ada topic yg sama -> update.
+ * Kalau belum ada -> insert baru. Sesuai req. user "menambahkan dengan
+ * nama [yg sama] file lama akan otomatis terganti dengan yang baru".
+ */
+function upsertMap({ topic, content, tags = '' }) {
+  const existing = db.prepare('SELECT id FROM map_data WHERE LOWER(topic) = LOWER(?)').get(topic);
+  if (existing) {
+    return updateMap({ id: existing.id, topic, content, tags });
+  }
+  return addMap({ topic, content, tags });
+}
+
+function clearAll() {
+  return db.prepare('DELETE FROM map_data').run().changes;
+}
+
 function addMap({ topic, content, tags = '' }) {
   const info = stmt.insert.run({ topic, content, tags });
   return stmt.get.get(info.lastInsertRowid);
@@ -59,6 +76,8 @@ module.exports = {
   listMaps,
   getMap,
   addMap,
+  upsertMap,
+  clearAll,
   updateMap,
   deleteMap,
   searchMap,

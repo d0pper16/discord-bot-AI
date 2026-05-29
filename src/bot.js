@@ -9,6 +9,7 @@ const gemini  = require('./ai/gemini');
 const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
 const chatLog = require('./db/chatLog');
+const customMemory = require('./db/customMemory');
 const audit   = require('./db/audit');
 const runtime = require('./utils/runtimeEnv');
 const robloxWatcher = require('./roblox/watcher');
@@ -29,6 +30,9 @@ const SABAR_WAIT_MS       = 60000;
 const TIMEOUT_DURATION_MS = 5 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS  = 3;
 const LOGIN_RETRY_MS      = 5000;
+const CACHE_TTL_DAYS      = 30;
+const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1x per hari
+const FORCED_MAP_TTL_MS   = 30 * 60 * 1000; // reset counter setelah 30 menit idle
 
 function loadCfg() {
   delete require.cache[require.resolve(cfgPath)];
@@ -64,6 +68,13 @@ const MSG = {
                    `It violates Roblox ToS and Indonesian ITE Law (Articles 30/32/33) ` +
                    `about unauthorized system access and data manipulation. Play fair.`,
   deferredErr: () => `masih limit nih, coba beberapa menit lagi yaa.`,
+
+  // ===== "No-such-map" / forced map (req. user) =====
+  noMapEmpty: (n) => `maaf yaa, database map ${lower(n)} lagi kosong nih, jadi terlalu banyak map di Roblox yang ${lower(n)} gak tau. Tanya admin map-nya yaa biar diisi datanya dulu.`,
+  noMapMiss:  (n) => `maaf, map itu belum ada di catatan ${lower(n)}. ${lower(n)} cuma bantu Roblox umum dan map yang ada di database. Coba tanya admin map yang bersangkutan.`,
+  forcedMap2: (n) => `udah ${lower(n)} bilang map itu gak ada di catatan, jangan dipaksa terus yaa. ${lower(n)} bukan google search.`,
+  forcedMap3: (n) => `udah ${lower(n)} bilang berkali-kali GAK ADA. kamu maksa terus, kalo gini ${lower(n)} mending diem aja deh.`,
+  forcedMap4: (n) => `(diem aja, gak nimpalin lagi)`,
 };
 
 // =================================================================
@@ -129,6 +140,28 @@ let API_OK   = false;
 let CHAN_OK  = false;
 const WAITING  = new Map();
 const TIMEOUTS = new Map();
+const FORCED_MAP = new Map(); // userId -> { hash, count, ts } untuk "no-such-map" escalation
+
+function looksLikeMapQuestion(text) {
+  return /\b(map|lobby|zona|dungeon|tempat|level|stage|world|raid|arena|gua|hutan|puncak|reruntuhan|spawn)\b/i.test(String(text));
+}
+
+function trackForcedMap(userId, question) {
+  const h = cache.normalize(question);
+  const now = Date.now();
+  const cur = FORCED_MAP.get(userId);
+  if (!cur || (now - cur.ts) > FORCED_MAP_TTL_MS) {
+    FORCED_MAP.set(userId, { hash: h, count: 1, ts: now });
+    return 1;
+  }
+  if (cache.jaccard(cur.hash, h) >= 0.7) {
+    cur.count++;
+    cur.ts = now;
+    return cur.count;
+  }
+  FORCED_MAP.set(userId, { hash: h, count: 1, ts: now });
+  return 1;
+}
 
 // ---- discord client ----
 const client = new Client({
@@ -265,7 +298,7 @@ async function validateChannelInternal() {
  * Validasi NEW values (dipakai endpoint dashboard sebelum apply).
  * Tidak modifikasi process.env -- test langsung dengan input.
  */
-async function validateNewValues({ channelId, primaryKey, secondaryKey } = {}) {
+async function validateNewValues({ channelId, primaryKey, secondaryKey, key1, key2, key3, key4, key5 } = {}) {
   const errors = {};
   const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
@@ -282,13 +315,15 @@ async function validateNewValues({ channelId, primaryKey, secondaryKey } = {}) {
     }
   }
 
-  if (primaryKey !== undefined && primaryKey !== null) {
-    const e = await testKey(primaryKey);
-    if (e) errors.primaryKey = e;
-  }
-  if (secondaryKey !== undefined && secondaryKey !== null) {
-    const e = await testKey(secondaryKey);
-    if (e) errors.secondaryKey = e;
+  // Backward-compat: primaryKey -> key1, secondaryKey -> key2
+  if (primaryKey !== undefined && key1 === undefined) key1 = primaryKey;
+  if (secondaryKey !== undefined && key2 === undefined) key2 = secondaryKey;
+
+  const slots = { key1, key2, key3, key4, key5 };
+  for (const [name, val] of Object.entries(slots)) {
+    if (val === undefined || val === null) continue;
+    const e = await testKey(val);
+    if (e) errors[name] = e;
   }
   if (channelId !== undefined && channelId !== null) {
     const id = String(channelId).trim();
@@ -316,14 +351,20 @@ async function validateNewValues({ channelId, primaryKey, secondaryKey } = {}) {
 // =================================================================
 async function applyEnvUpdate(updates = {}) {
   const persistKey = {};
-  if (typeof updates.channelId === 'string')    persistKey.YANTO_CHANNEL_ID = updates.channelId;
-  if (typeof updates.primaryKey === 'string')   persistKey.GEMINI_API_KEY_PRIMARY = updates.primaryKey;
-  if (typeof updates.secondaryKey === 'string') persistKey.GEMINI_API_KEY_SECONDARY = updates.secondaryKey;
+  if (typeof updates.channelId === 'string')   persistKey.YANTO_CHANNEL_ID = updates.channelId;
+  // legacy alias
+  if (typeof updates.primaryKey === 'string')   persistKey.GEMINI_API_KEY_1 = updates.primaryKey;
+  if (typeof updates.secondaryKey === 'string') persistKey.GEMINI_API_KEY_2 = updates.secondaryKey;
+  // 5-slot
+  for (let i = 1; i <= 5; i++) {
+    if (typeof updates[`key${i}`] === 'string') {
+      persistKey[`GEMINI_API_KEY_${i}`] = updates[`key${i}`];
+    }
+  }
 
   runtime.save(persistKey);
   log.info(`[env-update] runtime.json updated: ${Object.keys(persistKey).join(', ')}`);
 
-  // Re-validate seluruhnya
   const apiOk = await validateGeminiInternal();
   const chOk  = await validateChannelInternal();
   API_OK = apiOk;
@@ -367,6 +408,24 @@ async function coldStartFlow() {
       const uid = cfg.roblox && cfg.roblox.universeId ? String(cfg.roblox.universeId).trim() : '';
       robloxWatcher.start(uid);
     } catch (e) { log.warn('[startup] roblox watcher start error:', e.message); }
+
+    // Schedule cache TTL cleanup (req. user: hapus cache > 30 hari)
+    try {
+      const removed = cache.cleanupOlderThanDays(CACHE_TTL_DAYS);
+      if (removed > 0) log.info(`[cache.ttl] cold-start cleanup: ${removed} entries >${CACHE_TTL_DAYS}d removed`);
+    } catch (e) { log.warn('[cache.ttl] cold-start cleanup error:', e.message); }
+
+    // Background: cleanup harian
+    setInterval(() => {
+      try {
+        const removed = cache.cleanupOlderThanDays(CACHE_TTL_DAYS);
+        if (removed > 0) log.info(`[cache.ttl] daily cleanup: ${removed} entries >${CACHE_TTL_DAYS}d removed`);
+      } catch (e) { log.warn('[cache.ttl] daily cleanup error:', e.message); }
+    }, CACHE_CLEANUP_INTERVAL_MS).unref();
+
+    // Auto-refresh validasi API tiap 1 menit (round-robin)
+    gemini.startAutoRefresh();
+
     return;
   }
 
@@ -453,10 +512,34 @@ async function processQuestion(question, msg, opts = {}) {
   }
 
   const cfg = loadCfg();
+  const askedAt = Math.floor((msg.createdTimestamp || Date.now()) / 1000);
+
+  // 1) CUSTOM MEMORY lookup (priority TERTINGGI - ingatan buatan dari dashboard)
+  const customHit = customMemory.findSimilar(question, 0.85);
+  if (customHit) {
+    log.info(`[custom-memory] hit (score=${customHit.score.toFixed(2)}) -> ${question.slice(0, 60)}`);
+    const finalAnswer = customMemory.applyPlaceholders(customHit.row.answer, { botName: botName() });
+    // izinkan parsing user/role mention supaya tag di custom memory beneran nge-ping
+    const mention = `<@${msg.author.id}>`;
+    const text = finalAnswer.includes(mention) ? finalAnswer : `${mention} ${finalAnswer}`;
+    await msg.reply({
+      content: text.length > 1900 ? text.slice(0, 1900) : text,
+      allowedMentions: { parse: ['users', 'roles'], repliedUser: false },
+    });
+    chatLog.add({
+      discordId: msg.author.id,
+      username:  msg.author.username || msg.author.tag || 'unknown',
+      question,
+      answer:    finalAnswer,
+      source:    `custom-memory:${customHit.row.id}`,
+      askedAt,
+      answeredAt: Math.floor(Date.now() / 1000),
+    });
+    return;
+  }
 
   const followUp = isSpecificFollowup(question, cfg.cache.specificTriggers);
   const hit = cache.findSimilar(question, cfg.cache.similarityThreshold);
-  const askedAt = Math.floor((msg.createdTimestamp || Date.now()) / 1000);
 
   if (hit && !followUp) {
     log.info(`[cache] hit (score=${hit.score.toFixed(2)}) -> ${question.slice(0, 60)}`);
@@ -473,12 +556,42 @@ async function processQuestion(question, msg, opts = {}) {
     return;
   }
 
-  // 1) Cek status DB - kalau kosong, kasih flag ke prompt supaya Gemini
-  //    tolak pertanyaan map spesifik tapi tetap jawab Roblox umum.
+  // 2) Cek status DB - kalau kosong + question is map-related, escalate forced-map dance
   const allMaps = mapData.listMaps();
   const dbEmpty = allMaps.length === 0;
+  const matched = mapData.searchMap(question);
+  const isMapQ  = looksLikeMapQuestion(question);
 
-  // Gemini multilingual natively -- TIDAK perlu deteksi bahasa di sini.
+  if (isMapQ && (dbEmpty || matched.length === 0)) {
+    const cnt = trackForcedMap(msg.author.id, question);
+    log.info(`[forced-map] user=${msg.author.id} count=${cnt} dbEmpty=${dbEmpty}`);
+    let resp;
+    if (cnt === 1)      resp = dbEmpty ? MSG.noMapEmpty(botName()) : MSG.noMapMiss(botName());
+    else if (cnt === 2) resp = MSG.forcedMap2(botName());
+    else if (cnt === 3) resp = MSG.forcedMap3(botName());
+    else                resp = null; // silent treatment
+    if (resp) {
+      await reply(msg, resp);
+      chatLog.add({
+        discordId: msg.author.id,
+        username:  msg.author.username || msg.author.tag || 'unknown',
+        question,
+        answer:    resp,
+        source:    `forced-map:${cnt}`,
+        askedAt,
+        answeredAt: Math.floor(Date.now() / 1000),
+      });
+    } else {
+      // count >= 4: silent (tidak respon, tidak log)
+      log.info(`[forced-map] user=${msg.author.id} silent (count>=4)`);
+    }
+    return;
+  }
+
+  // Reset forced-map counter kalau user akhirnya nanya map yang ada
+  if (isMapQ && matched.length > 0) FORCED_MAP.delete(msg.author.id);
+
+  // 3) Bangun konteks Gemini
   const { buildSystemPrompt } = loadPersonality();
   const mapCtx = mapData.buildContext(question);
   const overlay = (cfg && typeof cfg.personaOverlay === 'string') ? cfg.personaOverlay : '';
@@ -517,13 +630,12 @@ async function processQuestion(question, msg, opts = {}) {
   }
   await sendLong(msg, answer);
 
-  // Logger 2: chat log persisten
   chatLog.add({
     discordId: msg.author.id,
     username:  msg.author.username || msg.author.tag || 'unknown',
     question,
     answer,
-    source:    `gemini:${res.keyUsed}${isDeferred ? '+deferred' : ''}${dbEmpty ? '+dbEmpty' : ''}`,
+    source:    `gemini:${res.keyUsed}(API ke-${res.keyNum})${isDeferred ? '+deferred' : ''}${dbEmpty ? '+dbEmpty' : ''}`,
     askedAt,
     answeredAt: Math.floor(Date.now() / 1000),
   });

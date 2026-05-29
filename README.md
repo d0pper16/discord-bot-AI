@@ -341,3 +341,107 @@ Display di tab Roblox Watcher:
 
 Watcher otomatis di-start juga setelah cold-start sukses dan setelah
 restart bot (selama universe ID terisi di config).
+
+
+
+## Format `.env` WAJIB (untuk deploy)
+
+File `.env` ini WAJIB ada sebelum `npm start`. Copy dari `.env.example`:
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Field wajib:
+
+```ini
+# DISCORD
+DISCORD_TOKEN=<token bot dari Discord Developer Portal>
+YANTO_CHANNEL_ID=<snowflake channel ID>
+
+# GEMINI (min 1 wajib, max 5 opsional fallback)
+GEMINI_API_KEY_1=<api key utama dari aistudio.google.com>
+GEMINI_API_KEY_2=<opsional>
+GEMINI_API_KEY_3=<opsional>
+GEMINI_API_KEY_4=<opsional>
+GEMINI_API_KEY_5=<opsional>
+GEMINI_MODEL=gemini-1.5-flash
+
+# DASHBOARD
+DASHBOARD_PORT=3000
+
+# DEV (full administrator)
+DEV_USER=dev
+DEV_PASS=devtbiapril2026
+
+# ADMIN (read-only + edit gaya bicara overlay)
+ADMIN_USER=admin
+ADMIN_PASS=admintbi2025
+```
+
+Setelah deploy:
+- Channel ID + 5 API keys juga bisa diubah via tab **Connection** di dashboard.
+- Disimpan di `data/runtime.json` (override .env, tetap aktif lintas restart).
+
+## Custom Memory (Ingatan Buatan)
+
+Tab **Ingatan Buatan** di dashboard. Bot pakai DULU sebelum ke cache/Gemini.
+Format placeholder yang didukung di kolom **jawaban**:
+
+| Format | Render |
+|--------|--------|
+| `{nama}` | nama bot dari config (auto, sesuai rename) |
+| `{bot}` | alias `{nama}` |
+| `<@123456789012345678>` | tag user spesifik (Discord User ID) |
+| `<@&987654321098765432>` | tag role spesifik (Discord Role ID) |
+
+Cara dapat User/Role ID Discord:
+1. Activate Developer Mode: Settings → Advanced → Developer Mode
+2. Right-click user/role → Copy ID
+
+Contoh entry:
+```
+Q: {nama} siapa pembuatmu?
+A: pembuatku adalah <@123456789012345678>, salah satu admin di server ini.
+
+Q: {nama} siapa admin di sini?
+A: admin server ini ada <@&987654321> -- mereka yang ngurusin semua hal.
+```
+
+Bot auto-detect via Jaccard similarity ≥ 0.85 (lebih ketat dari cache supaya
+match jelas saja).
+
+## 5 API Keys + Auto-Refresh
+
+- Slot: `GEMINI_API_KEY_1` ... `GEMINI_API_KEY_5` di `.env` atau dashboard.
+- API ke-1 selalu prioritas utama. Switch otomatis ke ke-2 saat rate-limit, dst.
+- **Auto-validate setiap 1 menit** (round-robin, 1 key per cycle).
+  Dengan 5 keys = tiap key divalidasi setiap ~5 menit.
+- Per-key state: ok / cooldown / banned / recent-error / validated.
+- Indikator "API ke-N" aktif di System Monitor & header status.
+- Total budget RPM/RPD = sum dari semua key yang ter-konfigurasi.
+
+## Logger 1 (Server) - 3-Hour TTL
+
+- In-memory FIFO max 5000 entries (~2-3 MB RAM).
+- Sweep tiap 5 menit: hapus entries non-error yang umurnya > 3 jam.
+- **Errors NEVER evicted by sweep** -- hanya hilang saat server restart.
+- Pas restart auto-clear semua (memory wiped).
+
+## Cache Auto-Cleanup 30 Hari
+
+- `chat_history` (cache jawaban AI) di-cleanup harian.
+- Entry yang `updated_at < (now - 30 days)` -> auto-deleted.
+- Mencegah cache "ingat" event/data lama yang sudah tidak relevan.
+- Cleanup pertama jalan saat cold-start, lalu interval 24 jam.
+
+## Forced Map Dance (Anti-Spam Map Question)
+
+Saat user nanya map yg ga ada di DB:
+1. **1×**: bot respon "maaf, map itu belum ada di catatan {nama}..."
+2. **2×** (similar question, same user, < 30 menit): "udah {nama} bilang map itu gak ada, jangan dipaksa terus..."
+3. **3×**: "udah berkali-kali GAK ADA, kamu maksa terus, kalo gini {nama} mending diem..."
+4. **4×+**: silent treatment (tidak respon sama sekali untuk pertanyaan ini)
+
+Counter reset setelah 30 menit idle atau saat user tanya map yang ada di DB.
