@@ -1,6 +1,10 @@
 {
   "name": "Yanto",
   "keyword": "yanto",
+  "personaOverlay": "",
+  "roblox": {
+    "universeId": ""
+  },
   "cache": {
     "similarityThreshold": 0.82,
     "specificTriggers": [

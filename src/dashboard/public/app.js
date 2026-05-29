@@ -35,6 +35,7 @@ $$('nav.tabs button').forEach(btn => {
     if (btn.dataset.tab === 'logs')       resumeLogPolling();
     if (btn.dataset.tab === 'connection') loadConnection();
     if (btn.dataset.tab === 'monitor')    refreshSystem(true);
+    if (btn.dataset.tab === 'roblox')     refreshRoblox(true);
   });
 });
 
@@ -96,6 +97,22 @@ function hideBusy() { $('#busy-overlay').hidden = true; }
 
 async function withConfirm(promptMsg, sender) {
   if (ROLE !== 'dev') { alert('Akun admin read-only.'); return null; }
+  const creds = await askConfirm(promptMsg);
+  if (!creds) return null;
+  const res = await sender(creds);
+  if (!res.ok && res.status !== 409 && res.status !== 400) {
+    let msg = 'Gagal: ' + res.status;
+    try { const j = await res.clone().json(); if (j && j.error) msg = j.error; }
+    catch (_) { try { msg = await res.clone().text(); } catch (__) {} }
+    alert(msg);
+    return null;
+  }
+  return res;
+}
+
+// withConfirmAny: TIDAK cek role -- backend yg validate (dev ATAU admin OK).
+// Dipakai utk persona overlay (admin punya hak edit).
+async function withConfirmAny(promptMsg, sender) {
   const creds = await askConfirm(promptMsg);
   if (!creds) return null;
   const res = await sender(creds);
@@ -473,19 +490,147 @@ $('#history-clear').onclick = async () => {
 loadHistory();
 
 // =================================================================
-//  PERSONALITY
+//  PERSONALITY (overlay only, admin & dev keduanya bisa edit)
 // =================================================================
-async function loadPersonality() {
-  $('#personality-editor').value = await fetch('/api/personality').then(r => r.text());
+async function loadPersonaOverlay() {
+  try {
+    const r = await fetch('/api/persona-overlay').then(r => r.json());
+    const v = r.overlay || '';
+    $('#po-content').value = v;
+    updateOverlayStatus(v);
+  } catch (e) { console.error(e); }
 }
-$('#personality-save').onclick = async () => {
-  const ok = await jsonWrite('PUT', '/api/personality',
-    { content: $('#personality-editor').value },
-    'Yakin simpan personality.js? Hot-reload aktif.');
-  if (ok) alert('Tersimpan.');
+function updateOverlayStatus(v) {
+  const el = $('#po-status');
+  $('#po-counter').textContent = (v || '').length;
+  if (v && v.trim()) {
+    el.className = 'cache-info cache-ok';
+    el.innerHTML = `<b>Overlay AKTIF</b> (${v.length}/500 char). Bot pakai BASE PERSONA + overlay ini.`;
+  } else {
+    el.className = 'cache-info';
+    el.innerHTML = `<b>Overlay KOSONG</b>. Bot pakai BASE PERSONA dari script saja (default).`;
+  }
+}
+$('#po-content').addEventListener('input', (e) => updateOverlayStatus(e.target.value));
+$('#po-save').onclick = async () => {
+  const overlay = $('#po-content').value;
+  if (overlay.length > 500) { alert('Max 500 karakter.'); return; }
+  // pakai withConfirmAny supaya admin juga bisa
+  const ok = await withConfirmAny(
+    'Yakin simpan overlay gaya bicara? Admin & dev keduanya boleh.',
+    (creds) => fetch('/api/persona-overlay', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overlay, _confirm_user: creds.user, _confirm_pass: creds.pass }),
+    })
+  );
+  if (ok) {
+    alert('Overlay tersimpan. Bot otomatis pakai gaya bicara baru di pertanyaan berikutnya.');
+    loadPersonaOverlay();
+  }
 };
-$('#personality-reload').onclick = loadPersonality;
-loadPersonality();
+$('#po-reset').onclick = async () => {
+  const yes = await askYesNo('Hapus overlay -> bot kembali ke BASE PERSONA dari script. Lanjutkan?', 'Reset Overlay');
+  if (!yes) return;
+  const ok = await withConfirmAny(
+    'Konfirmasi reset overlay (kosongkan).',
+    (creds) => fetch('/api/persona-overlay', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overlay: '', _confirm_user: creds.user, _confirm_pass: creds.pass }),
+    })
+  );
+  if (ok) {
+    alert('Overlay di-reset. Bot kembali ke BASE PERSONA.');
+    loadPersonaOverlay();
+  }
+};
+$('#po-reload').onclick = loadPersonaOverlay;
+loadPersonaOverlay();
+
+// =================================================================
+//  ROBLOX WATCHER (universe ID + status)
+// =================================================================
+async function loadRobloxConfig() {
+  try {
+    const r = await fetch('/api/roblox-config').then(r => r.json());
+    $('#rb-uid').value = r.universeId || '';
+  } catch (e) { console.error(e); }
+}
+$('#rb-reload').onclick = () => { loadRobloxConfig(); refreshRoblox(true); };
+$('#rb-save').onclick = async () => {
+  const universeId = $('#rb-uid').value.trim();
+  if (universeId !== '' && !/^\d{1,20}$/.test(universeId)) {
+    alert('Universe ID harus angka 1-20 digit (atau kosong utk disable).');
+    return;
+  }
+  const ok = await jsonWrite('PUT', '/api/roblox-config', { universeId },
+    universeId ? `Yakin set Universe ID = ${universeId}? Watcher akan dijalankan.`
+               : 'Yakin disable watcher (kosongkan Universe ID)?');
+  if (ok) {
+    const d = await ok.json();
+    alert(d.universeId ? `Watcher ON untuk universe ${d.universeId}` : 'Watcher OFF.');
+    refreshRoblox(true);
+  }
+};
+
+function fmtAgo(ms) {
+  if (!ms) return 'belum pernah';
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return s + ' detik lalu';
+  if (s < 3600) return Math.floor(s / 60) + ' menit lalu';
+  if (s < 86400) return Math.floor(s / 3600) + ' jam lalu';
+  return Math.floor(s / 86400) + ' hari lalu';
+}
+async function refreshRoblox(force = false) {
+  if (!force && !$('#tab-roblox').classList.contains('active')) return;
+  try {
+    const s = await fetch('/api/roblox-status').then(r => r.json());
+    const wrap = $('#rb-status');
+    if (!s.enabled) {
+      wrap.innerHTML = `
+        <div class="metric-card" style="grid-column:1/-1;text-align:center;padding:32px">
+          <div class="metric-label" style="justify-content:center">Watcher OFF</div>
+          <div style="color:var(--text-muted);font-size:13px">Universe ID belum diset. Isi field di atas dan klik "Simpan &amp; Mulai Watch".</div>
+        </div>`;
+      $('#rb-error').hidden = true;
+      return;
+    }
+    const playerStr = s.playing != null ? s.playing.toLocaleString() : '...';
+    const visitsStr = s.visits  != null ? s.visits.toLocaleString()  : '...';
+    const favStr    = s.favorited != null ? s.favorited.toLocaleString() : '-';
+    wrap.innerHTML = `
+      <div class="metric-card">
+        <div class="metric-label">Map Name</div>
+        <div class="metric-value" style="font-size:18px">${esc(s.name || 'loading...')}</div>
+        <div class="metric-sub">Universe ID: <code>${esc(s.universeId)}</code></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Players Online <span class="badge-active">live</span></div>
+        <div class="metric-value">${playerStr}</div>
+        <div class="metric-sub">update tiap 1 menit - terakhir: ${fmtAgo(s.lastPlayingUpdate)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Total Visits</div>
+        <div class="metric-value" style="font-size:24px">${visitsStr}</div>
+        <div class="metric-sub">update tiap 1 jam - terakhir: ${fmtAgo(s.lastVisitsUpdate)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Favorited</div>
+        <div class="metric-value" style="font-size:22px">${favStr}</div>
+        <div class="metric-sub">started ${fmtAgo(s.startedAt)}</div>
+      </div>`;
+    if (s.error) {
+      $('#rb-error').textContent = `[${fmtAgo(s.lastErrorAt)}] ${s.error}`;
+      $('#rb-error').hidden = false;
+    } else {
+      $('#rb-error').hidden = true;
+    }
+  } catch (e) { /* swallow */ }
+}
+setInterval(() => refreshRoblox(false), 15000);
+loadRobloxConfig();
+refreshRoblox(true);
 
 // =================================================================
 //  CONFIG

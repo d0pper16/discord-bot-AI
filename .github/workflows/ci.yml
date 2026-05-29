@@ -55,6 +55,7 @@ jobs:
             "src/bot.js"
             "src/ai/gemini.js"
             "src/ai/personality.js"
+            "src/roblox/watcher.js"
             "src/db/database.js"
             "src/db/mapData.js"
             "src/db/chatHistory.js"

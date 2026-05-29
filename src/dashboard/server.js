@@ -15,6 +15,7 @@ const gemini  = require('../ai/gemini');
 const audit   = require('../db/audit');
 const db      = require('../db/database');
 const runtime = require('../utils/runtimeEnv');
+const robloxWatcher = require('../roblox/watcher');
 const { bus } = require('../utils/hotReload');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -73,6 +74,17 @@ function requireConfirm(req, res, next) {
   if (safeEq(u, CRED.dev.user) && safeEq(p, CRED.dev.pass)) return next();
   return res.status(403).json({
     error: 'Konfirmasi gagal. Username/password dev salah.',
+  });
+}
+
+/** Konfirmasi yang menerima dev ATAU admin (dipakai utk persona overlay). */
+function requireConfirmAny(req, res, next) {
+  const u = (req.body && req.body._confirm_user) || '';
+  const p = (req.body && req.body._confirm_pass) || '';
+  if (safeEq(u, CRED.dev.user) && safeEq(p, CRED.dev.pass)) return next();
+  if (safeEq(u, CRED.admin.user) && safeEq(p, CRED.admin.pass)) return next();
+  return res.status(403).json({
+    error: 'Konfirmasi gagal. Username/password tidak match dev maupun admin.',
   });
 }
 
@@ -461,6 +473,33 @@ function start() {
     res.json(audit.search(q, limit));
   });
 
+  // ----------- Persona Overlay (READ utk semua role) -----------
+  app.get('/api/persona-overlay', (_req, res) => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      res.json({
+        overlay: typeof cfg.personaOverlay === 'string' ? cfg.personaOverlay : '',
+        maxLength: 500,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ----------- Roblox Watcher: status + config (READ semua role) -----------
+  app.get('/api/roblox-status', (_req, res) => {
+    res.json(robloxWatcher.getStatus());
+  });
+  app.get('/api/roblox-config', (_req, res) => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      const uid = (cfg.roblox && cfg.roblox.universeId) || '';
+      res.json({ universeId: uid });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ----------- DB Export (dev & admin boleh download backup) -----------
   app.get('/api/db/export', (req, res) => {
     const data = {
@@ -564,6 +603,50 @@ function start() {
     audit.log(req.auth.user, 'system.shutdown', 'process', '');
     setTimeout(() => bus.emit('shutdown'), 500);
     res.json({ ok: true, action: 'shutdown' });
+  });
+
+  // ----------- Persona Overlay update (admin ATAU dev) -----------
+  app.put('/api/persona-overlay', requireConfirmAny, (req, res) => {
+    let { overlay } = req.body || {};
+    if (typeof overlay !== 'string') overlay = '';
+    if (overlay.length > 500) {
+      return res.status(400).json({ error: 'Overlay maksimal 500 karakter.' });
+    }
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      cfg.personaOverlay = overlay;
+      atomicWriteFile(CONFIG_FILE, Buffer.from(JSON.stringify(cfg, null, 2), 'utf8'));
+      audit.log(req.auth.user, 'persona.overlay.save', 'config.json',
+        `len=${overlay.length}`);
+      log.info(`[dashboard] persona overlay diperbarui oleh ${req.auth.user} (len=${overlay.length})`);
+      res.json({ ok: true, length: overlay.length });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ----------- Roblox Watcher: update universe ID (dev only) -----------
+  app.put('/api/roblox-config', requireDev, requireConfirm, (req, res) => {
+    let { universeId } = req.body || {};
+    universeId = universeId == null ? '' : String(universeId).trim();
+    if (universeId !== '' && !/^\d{1,20}$/.test(universeId)) {
+      return res.status(400).json({ error: 'Universe ID harus angka 1-20 digit (atau kosong utk disable).' });
+    }
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      cfg.roblox = cfg.roblox || {};
+      cfg.roblox.universeId = universeId;
+      atomicWriteFile(CONFIG_FILE, Buffer.from(JSON.stringify(cfg, null, 2), 'utf8'));
+      // Restart watcher dengan ID baru (atau stop kalau kosong)
+      try { robloxWatcher.start(universeId); }
+      catch (e) { log.warn('[roblox] start error:', e.message); }
+      audit.log(req.auth.user, 'roblox.config.save', 'config.json',
+        universeId ? `universeId=${universeId}` : 'disabled');
+      log.info(`[dashboard] roblox universe ID diperbarui oleh ${req.auth.user}: "${universeId}"`);
+      res.json({ ok: true, universeId, status: robloxWatcher.getStatus() });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // ----------- Connection update (channel + API keys) -----------

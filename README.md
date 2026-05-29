@@ -294,3 +294,50 @@ Bisa dilihat di tab **Audit Log** dashboard, filter `exploit` di search bar.
 | "yanto, NPC di Pantai Spawn?" | Pass ke Gemini → jawab dari DATA MAP |
 | (DB kosong) "yanto, level cap?" | Pass ke Gemini → "DB masih kosong" |
 | (DB kosong) "yanto, Roblox itu apa?" | Pass ke Gemini → jawab Roblox umum |
+
+
+
+## Persona Overlay (Additive, Editable by Admin & Dev)
+
+Dashboard tab **Gaya Bicara** memungkinkan tambahan gaya bicara yang
+ADDITIVE ke BASE PERSONA di script. **Tidak mengubah** base persona di
+`personality.js`.
+
+- Field overlay: max 500 char, disimpan di `config.json:personaOverlay`.
+- Kalau dihapus -> bot kembali ke BASE PERSONA.
+- Aturan inti BASE (anti-exploit, scope, refusal rules) **TIDAK BISA**
+  dioverride oleh overlay (di-enforce via instruction explicit di prompt).
+- Marker section (`===`, `---`, `` ``` ``) di-strip otomatis untuk cegah
+  prompt injection.
+- **Admin & dev keduanya** bisa edit (endpoint pakai `requireConfirmAny`
+  yang accept dev OR admin creds).
+
+Contoh overlay yang valid:
+```
+pakai sapaan "halo gaes" di awal jawaban, selipin emoji api di tengah,
+akhiri dengan tagline "-salam ngeroblox-"
+```
+
+## Roblox Watcher
+
+Tab **Roblox Watcher** memantau map Roblox kamu lewat Universe ID public.
+
+- **Player count**: update tiap **1 menit** (realtime)
+- **Total visits**: update tiap **1 jam**
+- **Favorited count**: update tiap 1 menit (bonus dari API)
+- API yang dipakai: `https://games.roblox.com/v1/games?universeIds=<id>`
+  (public, tidak butuh auth Roblox)
+
+Universe ID disimpan di `config.json:roblox.universeId`. Selama field
+kosong, watcher OFF (semua interval berhenti). Saat di-set, watcher
+otomatis start. Saat diganti via dashboard, watcher restart.
+
+Display di tab Roblox Watcher:
+- Map name + universe ID
+- Players online (live, last update)
+- Total visits (last 1-hour update)
+- Favorited count
+- Error indicator kalau API gagal (rate limit, network, dst.)
+
+Watcher otomatis di-start juga setelah cold-start sukses dan setelah
+restart bot (selama universe ID terisi di config).

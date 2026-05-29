@@ -10,6 +10,7 @@ const mapData = require('./db/mapData');
 const cache   = require('./db/chatHistory');
 const audit   = require('./db/audit');
 const runtime = require('./utils/runtimeEnv');
+const robloxWatcher = require('./roblox/watcher');
 const { bus } = require('./utils/hotReload');
 
 // ---- konstanta path ----
@@ -327,6 +328,11 @@ async function coldStartFlow() {
     SLEEPING = false;
     log.info('[startup] validasi OK -> bot active, mengirim ucapan hello.');
     await sendToTargetChannel(MSG.hello(botName()));
+    try {
+      const cfg = loadCfg();
+      const uid = cfg.roblox && cfg.roblox.universeId ? String(cfg.roblox.universeId).trim() : '';
+      robloxWatcher.start(uid);
+    } catch (e) { log.warn('[startup] roblox watcher start error:', e.message); }
     return;
   }
 
@@ -350,6 +356,11 @@ async function restartFlow() {
   if (apiOk && chOk) {
     SLEEPING = false;
     await sendToTargetChannel(MSG.back(botName()));
+    try {
+      const cfg = loadCfg();
+      const uid = cfg.roblox && cfg.roblox.universeId ? String(cfg.roblox.universeId).trim() : '';
+      robloxWatcher.start(uid);
+    } catch (e) { log.warn('[restart] roblox watcher start error:', e.message); }
   } else {
     log.error(`[restart] HIDUP TAPI TIDUR. API=${apiOk}, Channel=${chOk}. Tidak ucap "hoamm".`);
     SLEEPING = true;
@@ -426,9 +437,11 @@ async function processQuestion(question, msg, opts = {}) {
   // Gemini multilingual natively -- TIDAK perlu deteksi bahasa di sini.
   const { buildSystemPrompt } = loadPersonality();
   const mapCtx = mapData.buildContext(question);
+  const overlay = (cfg && typeof cfg.personaOverlay === 'string') ? cfg.personaOverlay : '';
   const sysPrompt = buildSystemPrompt({
     name: botName(),
     dbEmpty,
+    overlay,
     mapContext: mapCtx,
     extraNote: followUp
       ? 'User minta jawaban LEBIH DETAIL/SPESIFIK dari sebelumnya. Tambahkan rincian relevan dari DATA MAP.'
