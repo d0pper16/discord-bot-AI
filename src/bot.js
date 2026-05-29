@@ -14,7 +14,9 @@ const cfgPath         = path.join(__dirname, '..', 'config.json');
 const personalityPath = path.join(__dirname, 'ai', 'personality.js');
 
 const RESTART_EXIT_CODE   = 42;
-const FAREWELL_DELAY_MS   = 5000;   // jeda setelah ucap pamit, baru exit
+const SHUTDOWN_EXIT_CODE  = 0;
+const RESTART_QUIET_MS    = 2500;   // RESTART: jeda kecil sebelum exit (TANPA pesan pamit)
+const SHUTDOWN_DELAY_MS   = 5000;   // SHUTDOWN: jeda setelah ucap pamit
 const WAKEUP_DELAY_MS     = 4000;   // jeda setelah online (restart) baru ucap "hoamm"
 const COLD_DELAY_MS       = 5000;   // jeda cold-start sebelum validasi API
 const COLD_RETRY_MS       = 30000;  // jeda retry validasi API
@@ -43,7 +45,7 @@ const lower   = (s) => s.toLowerCase();
 // ---- template pesan (semua memakai nama dinamis) ----
 const MSG = {
   hello:    (n) => `halo, kenalin aku ${lower(n)} aku adalah AI paling ganteng sedunia, yang siap membantu menjawab pertanyaan kalian di server ini, tinggal sebut aja namaku "${lower(n)}" maka aku akan menjawab semua pertanyaan kalian`,
-  back:     (_n) => `hoamm... enak banget tidurnya walaupun gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone`,
+  back:     (n) => `hoamm... enak banget ${lower(n)} tidurnya walau gak lama, udah siap bantu jawab pertanyaan kalian lagi nih @everyone`,
   farewell: (n) => `${ucfirst(n)} capek, ${lower(n)} tidur dulu yaa, babay semua... @everyone`,
   apiFail:  (_n) => `maaf yah, token/API kamu salah/error nih, aku gagal mendarat`,
   sabar:    (_n) => `sabar ya kak, kasih aku mikir dulu 1 menit yaa`,
@@ -160,29 +162,47 @@ async function restartFlow() {
 }
 
 // =================================================================
-//  Graceful restart (dipicu saat upload bot.js dari dashboard)
+//  Graceful restart (TANPA pesan pamit - permintaan user)
+//  Dipicu: upload bot.js, atau tombol "Restart" di dashboard.
 // =================================================================
 async function gracefulRestart(reason = 'restart') {
   if (SHUTTING) return;
   SHUTTING = true;
+  SLEEPING = true; // langsung diam total, tidak terima pesan baru
+  log.info(`[restart] ${reason} -- silent exit (no farewell), exit ${RESTART_QUIET_MS}ms lagi`);
+
+  // Jeda pendek supaya in-flight HTTP/Discord op bisa selesai.
+  setTimeout(() => {
+    try { client.destroy(); } catch (_) {}
+    process.exit(RESTART_EXIT_CODE);
+  }, RESTART_QUIET_MS);
+}
+
+// =================================================================
+//  Graceful shutdown total (ucap pamit, tidak respawn)
+//  Dipicu: tombol "Matikan Bot" di dashboard.
+// =================================================================
+async function gracefulShutdown(reason = 'shutdown') {
+  if (SHUTTING) return;
+  SHUTTING = true;
   SLEEPING = true;
-  log.info(`[restart] ${reason} -- pamit + exit dalam ${FAREWELL_DELAY_MS}ms`);
+  log.info(`[shutdown] ${reason} -- pamit + exit dalam ${SHUTDOWN_DELAY_MS}ms`);
 
   try {
     await sendToTargetChannel(MSG.farewell(botName()));
   } catch (err) {
-    log.warn('[restart] gagal ucap pamit:', err.message);
+    log.warn('[shutdown] gagal ucap pamit:', err.message);
   }
-
-  // beri waktu Discord menerima pesan + Gateway flush
   setTimeout(() => {
     try { client.destroy(); } catch (_) {}
-    process.exit(RESTART_EXIT_CODE);
-  }, FAREWELL_DELAY_MS);
+    process.exit(SHUTDOWN_EXIT_CODE);
+  }, SHUTDOWN_DELAY_MS);
 }
 
 // dengarkan event dari dashboard
 bus.on('upload:bot', () => gracefulRestart('upload bot.js'));
+bus.on('restart',    () => gracefulRestart('tombol restart'));
+bus.on('shutdown',   () => gracefulShutdown('tombol matikan bot'));
 
 // =================================================================
 //  Pemrosesan pertanyaan utama
@@ -386,7 +406,9 @@ module.exports = {
   start,
   stop,
   gracefulRestart,
+  gracefulShutdown,
   // helpers untuk dashboard / index
   state: () => ({ ready: READY, sleeping: SLEEPING, shutting: SHUTTING }),
   RESTART_EXIT_CODE,
+  SHUTDOWN_EXIT_CODE,
 };

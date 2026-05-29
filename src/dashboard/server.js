@@ -24,7 +24,9 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-// ---- Kredensial ----
+// =================================================================
+//  Kredensial
+// =================================================================
 const CRED = {
   dev:   { user: process.env.DEV_USER   || 'dev',
            pass: process.env.DEV_PASS   || 'devtbiapril2026' },
@@ -43,7 +45,9 @@ function roleOf(user, pass) {
   return null;
 }
 
-// ---- Middlewares ----
+// =================================================================
+//  Middlewares
+// =================================================================
 const authMw = basicAuth({
   authorizer: (user, pass) => roleOf(user, pass) !== null,
   authorizeAsync: false,
@@ -70,14 +74,14 @@ function requireConfirm(req, res, next) {
 }
 
 // =================================================================
-//  Validator config (min/max)
+//  Validator config
 // =================================================================
 const BOUNDS = {
   name:                { min: 2,   max: 20 },
   similarityThreshold: { min: 0.5, max: 1.0 },
   rpmLimit:            { min: 2,   max: 60 },
   rpdLimit:            { min: 100, max: 50000 },
-  cooldownSec:         { min: 10,  max: 300 },   // dashboard: detik
+  cooldownSec:         { min: 10,  max: 300 },
   reserveTokens:       { min: 0,   max: 3 },
   maxContextMessages:  { min: 0,   max: 30 },
 };
@@ -86,9 +90,8 @@ function validateConfigInput(input) {
   const errs = [];
   const name = String(input.name || '').trim();
   if (!/^[A-Za-z][A-Za-z0-9]{1,19}$/.test(name)) {
-    errs.push('Nama bot harus 2-20 karakter, alfanumerik, awal huruf (mis: Yanto, Dandi).');
+    errs.push('Nama bot harus 2-20 karakter, alfanumerik, awal huruf.');
   }
-
   const sim = Number(input.similarityThreshold);
   if (!Number.isFinite(sim) || sim < BOUNDS.similarityThreshold.min || sim > BOUNDS.similarityThreshold.max) {
     errs.push(`Threshold cache harus ${BOUNDS.similarityThreshold.min} - ${BOUNDS.similarityThreshold.max}.`);
@@ -116,17 +119,12 @@ function validateConfigInput(input) {
   if (!Number.isInteger(ctx) || ctx < BOUNDS.maxContextMessages.min || ctx > BOUNDS.maxContextMessages.max) {
     errs.push(`Memori pesan harus ${BOUNDS.maxContextMessages.min}-${BOUNDS.maxContextMessages.max}.`);
   }
-
   let triggers = input.specificTriggers;
   if (typeof triggers === 'string') {
     triggers = triggers.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   }
-  if (!Array.isArray(triggers)) {
-    errs.push('Pemicu detail harus list.');
-    triggers = [];
-  } else if (triggers.length > 50) {
-    errs.push('Pemicu detail maksimal 50 item.');
-  }
+  if (!Array.isArray(triggers)) { errs.push('Pemicu detail harus list.'); triggers = []; }
+  else if (triggers.length > 50) { errs.push('Pemicu detail maksimal 50 item.'); }
 
   if (errs.length) return { ok: false, errors: errs };
 
@@ -135,25 +133,17 @@ function validateConfigInput(input) {
     config: {
       name,
       keyword: name.toLowerCase(),
-      cache: {
-        similarityThreshold: sim,
-        specificTriggers: triggers,
-      },
-      gemini: {
-        rpmLimit: rpm,
-        rpdLimit: rpd,
-        cooldownMs: cdSec * 1000,
-        reserveTokens: reserve,
-      },
-      history: {
-        maxContextMessages: ctx,
-      },
+      cache: { similarityThreshold: sim, specificTriggers: triggers },
+      gemini: { rpmLimit: rpm, rpdLimit: rpd, cooldownMs: cdSec * 1000, reserveTokens: reserve },
+      history: { maxContextMessages: ctx },
     },
   };
 }
 
-// ---- helpers DB cache untuk rename guard ----
-const CACHE_SIZE_LIMIT = 100 * 1024; // 100 KB
+// =================================================================
+//  Cache size + rename helpers
+// =================================================================
+const CACHE_SIZE_LIMIT = 100 * 1024;
 
 function cacheSizeBytes() {
   const r = db.prepare(
@@ -163,32 +153,36 @@ function cacheSizeBytes() {
   return Number(r.s || 0);
 }
 
+/**
+ * Rename DINAMIS: memakai oldName & newName apa pun, semua varian case.
+ * Mis. dandi -> yanti, ganti dandi/DANDI/Dandi -> yanti/YANTI/Yanti.
+ */
 function renameInCache(oldName, newName) {
   if (!oldName || !newName) return { changes: 0 };
   if (oldName.toLowerCase() === newName.toLowerCase()) return { changes: 0 };
 
-  const variants = (s) => [
+  const variants = (s) => Array.from(new Set([
     s,
     s.toLowerCase(),
     s.toUpperCase(),
     s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(),
-  ];
+  ]));
   const oldV = variants(oldName);
   const newV = variants(newName);
 
-  // Bangun ekspresi REPLACE bertumpuk untuk semua varian
+  // Pastikan jumlah varian sama (set unik bisa beda) -> padding
+  while (newV.length < oldV.length) newV.push(newName);
+
   const buildExpr = (col) => {
     let expr = col;
-    for (let i = 0; i < oldV.length; i++) {
-      expr = `REPLACE(${expr}, ?, ?)`;
-    }
+    for (let i = 0; i < oldV.length; i++) expr = `REPLACE(${expr}, ?, ?)`;
     return expr;
   };
 
   const params = [];
-  for (let i = 0; i < oldV.length; i++) { params.push(oldV[i], newV[i]); } // question
-  for (let i = 0; i < oldV.length; i++) { params.push(oldV[i], newV[i]); } // answer
-  for (let i = 0; i < oldV.length; i++) { params.push(oldV[i], newV[i]); } // question_norm
+  for (let pass = 0; pass < 3; pass++) { // 3x utk question, answer, question_norm
+    for (let i = 0; i < oldV.length; i++) params.push(oldV[i], newV[i]);
+  }
 
   const sql = `UPDATE chat_history SET
     question      = ${buildExpr('question')},
@@ -199,7 +193,111 @@ function renameInCache(oldName, newName) {
 }
 
 // =================================================================
-//  Server start
+//  File Manager helpers
+// =================================================================
+const TEXT_EXT = /\.(js|json|md|css|html|txt|yml|yaml|cjs|mjs)$/i;
+const IGNORED_DIRS = new Set(['node_modules', '.git', 'data', '.idea', '.vscode']);
+const PROTECTED = new Set([
+  'package.json',
+  'runner.js',
+  'config.json',
+  'src/index.js',
+  'src/bot.js',
+  'src/ai/gemini.js',
+  'src/ai/personality.js',
+  'src/db/database.js',
+  'src/db/mapData.js',
+  'src/db/chatHistory.js',
+  'src/dashboard/server.js',
+  'src/dashboard/public/index.html',
+  'src/dashboard/public/app.js',
+  'src/dashboard/public/style.css',
+  'src/utils/hotReload.js',
+  'src/utils/logger.js',
+]);
+
+function safeRel(rel) {
+  if (typeof rel !== 'string' || !rel.trim()) throw new Error('path wajib');
+  const cleaned = rel.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (cleaned.includes('..') || cleaned.includes('\0')) throw new Error('Path traversal terdeteksi');
+  const abs = path.resolve(ROOT, cleaned);
+  if (abs !== ROOT && !abs.startsWith(ROOT + path.sep)) throw new Error('Path di luar project root');
+  const segs = cleaned.split('/');
+  if (segs.some(s => s.startsWith('.'))) throw new Error('Path tersembunyi tidak diizinkan');
+  if (segs.some(s => IGNORED_DIRS.has(s))) throw new Error('Path masuk direktori terlarang');
+  if (cleaned.toLowerCase() === '.env') throw new Error('.env tidak boleh diakses dari dashboard');
+  return { abs, rel: cleaned };
+}
+
+function listProjectFiles() {
+  const out = [];
+  function walk(dir) {
+    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      if (IGNORED_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile() && TEXT_EXT.test(e.name)) {
+        const rel = path.relative(ROOT, full).split(path.sep).join('/');
+        let size = 0; try { size = fs.statSync(full).size; } catch (_) {}
+        out.push({
+          path: rel,
+          size,
+          ext: path.extname(e.name).slice(1).toLowerCase(),
+          protected: PROTECTED.has(rel),
+        });
+      }
+    }
+  }
+  walk(ROOT);
+  out.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
+}
+
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+/** Cari file dengan nama mirip (Lev <= 2) di direktori tujuan. */
+function findSimilar(targetDir, fileName, maxDistance = 2) {
+  let dirAbs;
+  try { dirAbs = path.resolve(ROOT, targetDir); }
+  catch (_) { return []; }
+  if (!fs.existsSync(dirAbs) || !fs.statSync(dirAbs).isDirectory()) return [];
+  const lower = fileName.toLowerCase();
+  let entries; try { entries = fs.readdirSync(dirAbs); } catch (_) { return []; }
+  return entries
+    .filter((n) => {
+      try { return fs.statSync(path.join(dirAbs, n)).isFile() && !n.startsWith('.'); }
+      catch (_) { return false; }
+    })
+    .map((n) => ({ name: n, distance: levenshtein(lower, n.toLowerCase()) }))
+    .filter((x) => x.distance > 0 && x.distance <= maxDistance)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+function atomicWriteFile(absPath, buf) {
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  const tmp = absPath + '.tmp-' + Date.now();
+  fs.writeFileSync(tmp, buf);
+  fs.renameSync(tmp, absPath);
+}
+
+// =================================================================
+//  start()
 // =================================================================
 function start() {
   const app = express();
@@ -210,12 +308,9 @@ function start() {
   app.use(express.urlencoded({ extended: true, limit: '4mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
-  // ---- Identitas ----
-  app.get('/api/me', (req, res) => {
-    res.json({ user: req.auth.user, role: req.role });
-  });
+  // ----------- Identity / Status -----------
+  app.get('/api/me', (req, res) => res.json({ user: req.auth.user, role: req.role }));
 
-  // ---- Status ----
   app.get('/api/status', (req, res) => {
     res.json({
       ok: true,
@@ -237,8 +332,6 @@ function start() {
   app.get('/api/config', (_req, res) => {
     res.type('application/json').send(fs.readFileSync(CONFIG_FILE, 'utf8'));
   });
-
-  /** Config dalam bentuk struktur friendly untuk form (cooldownSec, dst). */
   app.get('/api/config-fields', (_req, res) => {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     res.json({
@@ -257,35 +350,52 @@ function start() {
       cacheLimitBytes: CACHE_SIZE_LIMIT,
     });
   });
-
   app.get('/api/cache-size', (_req, res) => {
     res.json({ bytes: cacheSizeBytes(), limit: CACHE_SIZE_LIMIT });
   });
-
   app.get('/api/maps', (_req, res) => res.json(mapData.listMaps()));
-
   app.get('/api/history', (req, res) => {
-    const q     = req.query.q || '';
+    const q = req.query.q || '';
     const limit = Math.min(Number(req.query.limit) || 200, 1000);
     res.json(cache.searchHistory(q, limit));
+  });
+
+  // ----------- File manager: list & read -----------
+  app.get('/api/files', (_req, res) => {
+    res.json({ files: listProjectFiles(), protected: Array.from(PROTECTED) });
+  });
+  app.get('/api/files/read', (req, res) => {
+    try {
+      const { abs, rel } = safeRel(req.query.path || '');
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+        return res.status(404).json({ error: 'file tidak ditemukan' });
+      }
+      if (!TEXT_EXT.test(rel)) return res.status(400).json({ error: 'hanya file teks yang bisa dibaca' });
+      res.json({
+        path: rel,
+        content: fs.readFileSync(abs, 'utf8'),
+        protected: PROTECTED.has(rel),
+        size: fs.statSync(abs).size,
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
   });
 
   // =================================================================
   //  WRITE (dev only + konfirmasi)
   // =================================================================
 
-  // ---- Personality ----
+  // ----------- Personality (dipakai tab khusus) -----------
   app.put('/api/personality', requireDev, requireConfirm, (req, res) => {
     const { content } = req.body;
     if (typeof content !== 'string') return res.status(400).json({ error: 'content wajib string' });
-    const tmp = PERSONALITY_FILE + '.tmp';
-    fs.writeFileSync(tmp, content, 'utf8');
-    fs.renameSync(tmp, PERSONALITY_FILE);
+    atomicWriteFile(PERSONALITY_FILE, Buffer.from(content, 'utf8'));
     log.info(`[dashboard] personality.js diperbarui oleh ${req.auth.user}`);
     res.json({ ok: true });
   });
 
-  // ---- Config via form fields ----
+  // ----------- Config form -----------
   app.put('/api/config-fields', requireDev, requireConfirm, (req, res) => {
     const v = validateConfigInput(req.body);
     if (!v.ok) return res.status(400).json({ error: v.errors.join(' | '), errors: v.errors });
@@ -294,88 +404,225 @@ function start() {
     const oldCfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     const oldName = oldCfg.name || 'Yanto';
     const newName = newCfg.name;
+    const force = !!req.body.force;
 
-    // Rename guard: cache > 100KB harus dihapus dulu
     let renameInfo = { changes: 0 };
+    let cleared = 0;
     if (oldName.toLowerCase() !== newName.toLowerCase()) {
       const size = cacheSizeBytes();
-      if (size > CACHE_SIZE_LIMIT) {
-        return res.status(400).json({
-          error: `Cache ingatan ${(size / 1024).toFixed(1)}KB melebihi 100KB. Hapus dulu cache di tab "Riwayat Chat" sebelum mengubah nama bot.`,
+      if (size > CACHE_SIZE_LIMIT && !force) {
+        // Konfirmasi force diperlukan
+        return res.status(409).json({
+          requiresForce: true,
+          oldName, newName,
           cacheSizeBytes: size,
           cacheLimitBytes: CACHE_SIZE_LIMIT,
+          message: `Peringatan: Cache ${(size / 1024).toFixed(1)}KB > 100KB. Ganti nama akan menghapus cache ingatan. Lanjutkan?`,
         });
       }
-      renameInfo = renameInCache(oldName, newName);
-      log.info(`[dashboard] rename bot ${oldName} -> ${newName}, cache rows updated=${renameInfo.changes}`);
+      if (force && size > CACHE_SIZE_LIMIT) {
+        cleared = cache.clearAll();
+        log.warn(`[rename] force=true, cache dihapus (${cleared} rows)`);
+      } else {
+        renameInfo = renameInCache(oldName, newName);
+      }
+      log.info(`[dashboard] rename bot ${oldName} -> ${newName} (cache rows updated=${renameInfo.changes}, cleared=${cleared})`);
     }
 
-    // Tulis config atomic
-    const tmp = CONFIG_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(newCfg, null, 2), 'utf8');
-    fs.renameSync(tmp, CONFIG_FILE);
+    atomicWriteFile(CONFIG_FILE, Buffer.from(JSON.stringify(newCfg, null, 2), 'utf8'));
     log.info(`[dashboard] config.json diperbarui oleh ${req.auth.user}`);
-    res.json({ ok: true, renamedRows: renameInfo.changes });
+    res.json({ ok: true, renamedRows: renameInfo.changes, clearedRows: cleared });
   });
 
-  // ---- Upload script ----
-  app.post('/api/upload',
+  // ----------- Tombol Restart / Shutdown -----------
+  app.post('/api/restart', requireDev, requireConfirm, (_req, res) => {
+    setTimeout(() => bus.emit('restart'), 500);
+    res.json({ ok: true, action: 'restart' });
+  });
+  app.post('/api/shutdown', requireDev, requireConfirm, (_req, res) => {
+    setTimeout(() => bus.emit('shutdown'), 500);
+    res.json({ ok: true, action: 'shutdown' });
+  });
+
+  // ----------- File Manager: simpan (edit) file existing -----------
+  app.put('/api/files/save', requireDev, requireConfirm, (req, res) => {
+    try {
+      const { path: rel, content } = req.body || {};
+      if (typeof content !== 'string') return res.status(400).json({ error: 'content wajib string' });
+      const sf = safeRel(rel);
+      if (!fs.existsSync(sf.abs)) return res.status(404).json({ error: 'file tidak ditemukan, gunakan endpoint create' });
+      if (!TEXT_EXT.test(sf.rel)) return res.status(400).json({ error: 'hanya file teks yg dapat di-edit' });
+      // Validasi JSON kalau .json
+      if (/\.json$/i.test(sf.rel)) {
+        try { JSON.parse(content); }
+        catch (e) { return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+      }
+      atomicWriteFile(sf.abs, Buffer.from(content, 'utf8'));
+      log.info(`[files] save ${sf.rel} oleh ${req.auth.user}`);
+
+      const isBot = sf.rel === 'src/bot.js';
+      if (isBot) setTimeout(() => bus.emit('upload:bot'), 1000);
+      res.json({ ok: true, path: sf.rel, restarting: isBot });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // ----------- File Manager: buat file baru -----------
+  app.post('/api/files/create', requireDev, requireConfirm, (req, res) => {
+    try {
+      const { path: rel, content = '' } = req.body || {};
+      const sf = safeRel(rel);
+      if (fs.existsSync(sf.abs)) {
+        return res.status(409).json({ error: 'file sudah ada, gunakan save (update)' });
+      }
+      if (!TEXT_EXT.test(sf.rel)) return res.status(400).json({ error: 'ekstensi belum didukung' });
+      if (/\.json$/i.test(sf.rel) && content) {
+        try { JSON.parse(content); }
+        catch (e) { return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+      }
+      atomicWriteFile(sf.abs, Buffer.from(String(content), 'utf8'));
+      log.info(`[files] create ${sf.rel} oleh ${req.auth.user}`);
+      res.json({ ok: true, path: sf.rel });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // ----------- File Manager: hapus -----------
+  app.delete('/api/files/delete', requireDev, requireConfirm, (req, res) => {
+    try {
+      const { path: rel } = req.body || {};
+      const sf = safeRel(rel);
+      if (PROTECTED.has(sf.rel)) {
+        return res.status(403).json({ error: `File ${sf.rel} dilindungi. Tidak bisa dihapus.` });
+      }
+      if (!fs.existsSync(sf.abs)) return res.status(404).json({ error: 'file tidak ditemukan' });
+      fs.unlinkSync(sf.abs);
+      log.info(`[files] delete ${sf.rel} oleh ${req.auth.user}`);
+      res.json({ ok: true, path: sf.rel });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // ----------- File Manager: upload (dengan typo guard) -----------
+  app.post('/api/files/upload',
     requireDev,
     upload.single('file'),
     requireConfirm,
     (req, res) => {
-      const target = req.body.target;
-      const map = {
-        personality: PERSONALITY_FILE,
-        config:      CONFIG_FILE,
-        bot:         BOT_FILE,
-      };
-      const dest = map[target];
-      if (!dest) {
-        if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
-        return res.status(400).json({ error: 'target tidak dikenal' });
-      }
-      if (!req.file) return res.status(400).json({ error: 'file kosong' });
+      const cleanup = () => { if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {} };
+      try {
+        if (!req.file) { cleanup(); return res.status(400).json({ error: 'file kosong' }); }
 
-      const expected = path.basename(dest).toLowerCase();
-      const actual   = (req.file.originalname || '').toLowerCase();
-      if (actual !== expected) {
-        try { fs.unlinkSync(req.file.path); } catch (_) {}
-        return res.status(400).json({
-          error: `Nama file harus "${expected}" (kamu upload "${actual}").`,
-        });
-      }
+        const dir       = String(req.body.dir || '').replace(/^\/+|\/+$/g, '');
+        const mode      = String(req.body.mode || 'auto');         // 'auto' | 'update' | 'create'
+        const tgtPath   = String(req.body.target_path || '').trim();
+        const orig      = req.file.originalname || '';
 
-      const buf = fs.readFileSync(req.file.path);
-      if (dest === CONFIG_FILE) {
-        try { JSON.parse(buf.toString('utf8')); }
-        catch (e) {
-          fs.unlinkSync(req.file.path);
-          return res.status(400).json({ error: 'JSON tidak valid: ' + e.message });
+        // tentukan target
+        let relTarget;
+        if (tgtPath) {
+          relTarget = tgtPath;
+        } else {
+          if (!orig) { cleanup(); return res.status(400).json({ error: 'nama file kosong' }); }
+          relTarget = (dir ? dir + '/' : '') + orig;
         }
+
+        const sf = safeRel(relTarget);
+        if (!TEXT_EXT.test(sf.rel)) {
+          cleanup();
+          return res.status(400).json({ error: 'ekstensi tidak didukung (hanya teks)' });
+        }
+
+        const exists = fs.existsSync(sf.abs);
+
+        // Mode auto -> pre-flight typo detection
+        if (mode === 'auto') {
+          if (exists) {
+            // exact target ada -> minta konfirmasi sebagai update
+            cleanup();
+            return res.status(409).json({
+              status: 'exists',
+              targetPath: sf.rel,
+              message: `File ${sf.rel} sudah ada. Pilih: update (timpa) atau batalkan dan rename file.`,
+            });
+          }
+          // target belum ada -> cek typo di direktori parent
+          const parentDir = path.dirname(sf.rel);
+          const fileName  = path.basename(sf.rel);
+          const sims = findSimilar(parentDir, fileName, 2);
+          if (sims.length) {
+            cleanup();
+            return res.status(409).json({
+              status: 'ambiguous',
+              targetPath: sf.rel,
+              parentDir,
+              uploaded: fileName,
+              suggestions: sims.map(s => ({
+                path: (parentDir === '.' ? '' : parentDir + '/') + s.name,
+                name: s.name,
+                distance: s.distance,
+              })),
+              message: `File "${fileName}" mirip dengan file existing (beda 1-2 huruf). Pilih: update file existing atau buat file baru.`,
+            });
+          }
+          // benar-benar baru -> minta konfirmasi sebagai NEW
+          cleanup();
+          return res.status(409).json({
+            status: 'new',
+            targetPath: sf.rel,
+            message: `File baru: ${sf.rel}. Konfirmasi penambahan file baru?`,
+          });
+        }
+
+        // Mode 'update'
+        if (mode === 'update') {
+          if (!exists) {
+            cleanup();
+            return res.status(400).json({ error: `target ${sf.rel} tidak ada untuk di-update` });
+          }
+          const buf = fs.readFileSync(req.file.path);
+          if (/\.json$/i.test(sf.rel)) {
+            try { JSON.parse(buf.toString('utf8')); }
+            catch (e) { cleanup(); return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+          }
+          atomicWriteFile(sf.abs, buf);
+          cleanup();
+          log.info(`[files] upload UPDATE ${sf.rel} oleh ${req.auth.user}`);
+          const isBot = sf.rel === 'src/bot.js';
+          if (isBot) setTimeout(() => bus.emit('upload:bot'), 1000);
+          return res.json({ ok: true, mode: 'update', path: sf.rel, restarting: isBot });
+        }
+
+        // Mode 'create'
+        if (mode === 'create') {
+          if (exists) {
+            cleanup();
+            return res.status(409).json({ error: `target ${sf.rel} sudah ada (gunakan mode=update)` });
+          }
+          const buf = fs.readFileSync(req.file.path);
+          if (/\.json$/i.test(sf.rel)) {
+            try { JSON.parse(buf.toString('utf8')); }
+            catch (e) { cleanup(); return res.status(400).json({ error: 'JSON tidak valid: ' + e.message }); }
+          }
+          atomicWriteFile(sf.abs, buf);
+          cleanup();
+          log.info(`[files] upload CREATE ${sf.rel} oleh ${req.auth.user}`);
+          return res.json({ ok: true, mode: 'create', path: sf.rel });
+        }
+
+        cleanup();
+        return res.status(400).json({ error: 'mode tidak dikenal (auto/update/create)' });
+      } catch (e) {
+        if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(400).json({ error: e.message });
       }
-
-      // Atomic write -> file lain TIDAK tersentuh
-      const tmp = dest + '.tmp';
-      fs.writeFileSync(tmp, buf);
-      fs.renameSync(tmp, dest);
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
-
-      log.info(`[dashboard] upload ${target} oleh ${req.auth.user}`);
-
-      // Khusus bot.js: trigger graceful restart 2 detik kemudian
-      if (target === 'bot') {
-        setTimeout(() => {
-          try { bus.emit('upload:bot'); }
-          catch (e) { log.error('emit upload:bot', e); }
-        }, 2000);
-        return res.json({ ok: true, target, file: expected, restarting: true });
-      }
-      res.json({ ok: true, target, file: expected });
     }
   );
 
-  // ---- Map DB CRUD ----
+  // ----------- Map DB CRUD -----------
   app.post('/api/maps', requireDev, requireConfirm, (req, res) => {
     const { topic, content, tags } = req.body || {};
     if (!topic || !content) return res.status(400).json({ error: 'topic & content wajib' });
@@ -391,7 +638,7 @@ function start() {
     res.json({ ok: mapData.deleteMap(Number(req.params.id)) });
   });
 
-  // ---- Chat history ----
+  // ----------- Chat history -----------
   app.put('/api/history/:id', requireDev, requireConfirm, (req, res) => {
     const id = Number(req.params.id);
     const { question, answer } = req.body || {};
@@ -405,18 +652,14 @@ function start() {
     res.json({ deleted: cache.clearAll() });
   });
 
-  // ---- Error handler ----
+  // ----------- Error handler -----------
   app.use((err, _req, res, _next) => {
-    if (err && err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(413).json({ error: 'File terlalu besar (>5MB).' });
-    }
+    if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'File terlalu besar (>5MB).' });
     log.error('[dashboard]', err);
     res.status(500).json({ error: err.message || 'internal error' });
   });
 
-  app.get('/', (_req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  });
+  app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
   return new Promise((resolve) => {
     const srv = app.listen(port, () => {
